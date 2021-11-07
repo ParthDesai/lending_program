@@ -1,0 +1,22 @@
+[package]
+name = "lending-program"
+version = "0.1.0"
+edition = "2018"
+
+[features]
+no-entrypoint = []
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+spl-token = {version = "3.0.1", features = ["no-entrypoint"]}
+solana-program = "1.7.4"
+arrayref = "0.3.6"
+thiserror = "1.0.21"
+num-derive = "0.3"
+num-traits = "0.2"
+chainlink = { git = "https://github.com/smartcontractkit/chainlink-solana", package = "chainlink-solana", features = ["no-entrypoint"] }
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
