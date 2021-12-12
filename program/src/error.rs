@@ -16,7 +16,7 @@ pub enum LendingPlatformError {
     #[error("Incorrect signers for the instruction.")]
     IncorrectSigner,
 
-    #[error("NFT State account must be rent-exempt.")]
+    #[error("account must be rent-exempt.")]
     NotRentExempt,
 
     #[error("NFT state/set account can only be initialized once.")]
@@ -24,6 +24,27 @@ pub enum LendingPlatformError {
 
     #[error("Invalid accounts passed in the instruction")]
     InvalidAccounts,
+
+    #[error("Overflow when calculating")]
+    MathOverFlow,
+
+    #[error("Loan is still valid, so cannot be defaulted")]
+    StillValidLoan,
+
+    #[error("Loan is already defaulted")]
+    DefaultedLoan,
+
+    #[error("Lending pool is not open")]
+    LendingPoolNotOpen,
+
+    #[error("Invalid SOL to USD feed")]
+    InvalidSOLUSDFeed,
+
+    #[error("Lending pool does not have enough funds")]
+    NotEnoughFundsInLendingPool,
+
+    #[error("Lending pool has outstanding loans")]
+    LendingPoolHasOutstandingLoan
 }
 
 impl From<LendingPlatformError> for ProgramError {
@@ -49,13 +70,34 @@ impl PrintProgramError for LendingPlatformError {
                 println!("Error: Incorrect signers for the instruction.")
             }
             LendingPlatformError::NotRentExempt => {
-                println!("Error: NFT state account must be rent-exempt.")
+                println!("account must be rent-exempt.")
             }
             LendingPlatformError::AlreadyInitialized => {
                 println!("NFT state can only be initialized once.")
             }
             LendingPlatformError::InvalidAccounts => {
                 println!("Invalid accounts passed in the instruction")
+            },
+            LendingPlatformError::DefaultedLoan => {
+                println!("Loan is already defaulted")
+            }
+            LendingPlatformError::MathOverFlow => {
+                println!("Overflow when calculating")
+            }
+            LendingPlatformError::StillValidLoan => {
+                println!("Loan is still valid, so cannot be defaulted")
+            }
+            LendingPlatformError::LendingPoolNotOpen => {
+                println!("Lending pool is not open")
+            }
+            LendingPlatformError::InvalidSOLUSDFeed => {
+                println!("Invalid SOL to USD chainlink feed account passed")
+            }
+            LendingPlatformError::NotEnoughFundsInLendingPool => {
+                println!("Not enough funds in lending pool")
+            }
+            LendingPlatformError::LendingPoolHasOutstandingLoan => {
+                println!("Lending pool has outstanding loans")
             }
         }
     }

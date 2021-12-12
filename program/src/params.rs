@@ -3,6 +3,43 @@ use arrayref::{array_ref, array_refs, mut_array_refs};
 use solana_program::program_error::ProgramError;
 
 #[derive(Debug, PartialEq)]
+pub struct InitLendingPoolAccount {
+    pub bump_seed: u8
+}
+
+impl InitLendingPoolAccount {
+    const LEN: usize = 1;
+
+    pub fn len(&self) -> usize {
+        Self::LEN
+    }
+
+    pub fn unpack(instruction_data: &[u8]) -> Result<(Self, &[u8]), ProgramError> {
+        if instruction_data.len() < InitLendingPoolAccount::LEN {
+            return Err(LendingPlatformError::InvalidInstruction.into());
+        }
+
+        let (data, rest) = instruction_data.split_at(InitLendingPoolAccount::LEN);
+        let src = array_ref![data, 0, InitLendingPoolAccount::LEN];
+
+        let bump_seed = src[0];
+
+        Ok((InitLendingPoolAccount{
+            bump_seed
+        }, rest))
+    }
+
+    pub fn pack(&self) -> Vec<u8> {
+        let mut dst = [0u8; InitLendingPoolAccount::LEN];
+
+        dst[0] = self.bump_seed;
+
+        dst.to_vec()
+    }
+
+}
+
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub struct NewLendingPool {
     pub total_lending_amount: u64,
     pub max_payback_time: u64,

@@ -1,17 +1,18 @@
 use crate::error::LendingPlatformError;
 use crate::instructions::{LendingPlatformInstructions};
-use crate::params::{NewLoan, NewLendingPool, PaybackLoan, DefaultLoan, CloseLending};
+use crate::params::{NewLoan, NewLendingPool, PaybackLoan, DefaultLoan, CloseLending, InitLendingPoolAccount};
 use crate::state::{LendingPoolState, LoanState, LENDINGPOOL_OPEN, LOANSTATE_LOANED, LOANSTATE_PAYEDBACK, LOANSTATE_DEFAULTED, LENDINGPOOL_CLOSE};
 use solana_program::account_info::{next_account_info, AccountInfo};
 use solana_program::entrypoint::ProgramResult;
 use solana_program::program::{invoke, invoke_signed};
-use solana_program::system_instruction::{transfer as system_transfer};
+use solana_program::system_instruction::{create_account, transfer as system_transfer};
 use solana_program::program_pack::{IsInitialized, Pack};
 use solana_program::pubkey::Pubkey;
 use solana_program::rent::Rent;
 use solana_program::sysvar::Sysvar;
 use solana_program::clock::Clock;
 use std::convert::TryInto;
+use solana_program::msg;
 
 const CHAINLINK_SOL_USD_FEED_ADDRESS: &str = "FmAmfoyPXiA8Vhhe6MZTr3U6rZfEZ1ctEHay1ysqCqcf";
 const SOL_TO_LAMPORT_MULTIPLIER: u128 = 100000000;
@@ -28,12 +29,60 @@ impl Processor {
         let instruction = LendingPlatformInstructions::unpack(instruction_data)?;
 
         match instruction {
+            LendingPlatformInstructions::InitLendingPoolAccount(arg) => Self::process_init_lending_pool(program_id, accounts, arg),
             LendingPlatformInstructions::NewLoan(arg) => Self::new_loan(program_id, accounts, arg),
             LendingPlatformInstructions::NewLendingPool(arg) => Self::new_lending_pool(program_id, accounts, arg),
             LendingPlatformInstructions::PaybackLoan(arg) => Self::payback_loan(program_id, accounts, arg),
             LendingPlatformInstructions::DefaultLoan(arg) => Self::default_loan(program_id, accounts, arg),
-            LendingPlatformInstructions::CloseLending(arg) => Self::close_lending(program_id, accounts, arg)
+            LendingPlatformInstructions::CloseLending(arg) => Self::close_lending(program_id, accounts, arg),
         }
+    }
+
+    pub fn process_init_lending_pool(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        arg: InitLendingPoolAccount,
+    ) -> ProgramResult {
+        let accounts_iter = &mut accounts.iter();
+
+        let system_program = next_account_info(accounts_iter)?;
+        let rent_sysvar_account = next_account_info(accounts_iter)?;
+        let lender_account = next_account_info(accounts_iter)?;
+        let empty_lending_pool_account = next_account_info(accounts_iter)?;
+
+        let rent = Rent::from_account_info(rent_sysvar_account)?;
+
+        let lender_account_bytes = lender_account.key.to_bytes();
+        let lending_pool_pda_signer_seeds : &[&[_]] = &[
+            b"lending_pool",
+            &lender_account_bytes,
+            &[arg.bump_seed]
+        ];
+        let pda_lending_pool = Pubkey::create_program_address(lending_pool_pda_signer_seeds, program_id)?;
+
+        if *empty_lending_pool_account.key != pda_lending_pool {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+
+        let init_lending_pool_account = create_account(
+            &lender_account.key,
+            &empty_lending_pool_account.key,
+            rent.minimum_balance(LendingPoolState::LEN),
+            LendingPoolState::LEN as u64,
+            &program_id,
+        );
+
+        invoke_signed(
+            &init_lending_pool_account,
+            &[
+                system_program.clone(),
+                lender_account.clone(),
+                empty_lending_pool_account.clone(),
+            ],
+            &[&lending_pool_pda_signer_seeds],
+        )?;
+
+        Ok(())
     }
 
     pub fn new_lending_pool(program_id: &Pubkey, accounts:&[AccountInfo], arg: NewLendingPool) -> ProgramResult {
@@ -48,8 +97,6 @@ impl Processor {
         let rent = &Rent::from_account_info(rent_sysvar)?;
         let token_program = next_account_info(account_info_iter)?;
 
-
-
         if !lender_account.is_signer {
             return Err(LendingPlatformError::IncorrectSigner.into());
         }
@@ -58,10 +105,6 @@ impl Processor {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
         if lender_spl_data.mint != *spl_mint.key {
-            return Err(LendingPlatformError::InvalidAccounts.into());
-        }
-
-        if !rent.is_exempt(empty_lending_pool_account.lamports(), empty_lending_pool_account.data_len()) {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
 
@@ -77,7 +120,13 @@ impl Processor {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
 
+        if !rent.is_exempt(empty_lending_pool_account.lamports(), empty_lending_pool_account.data_len()) {
+            msg!("Lending pool account is not rent exempt");
+            return Err(LendingPlatformError::NotRentExempt.into());
+        }
+
         if !rent.is_exempt(empty_lending_pool_spl_account.lamports(), empty_lending_pool_spl_account.data_len()) {
+            msg!("Lending pool spl account is not rent exempt");
             return Err(LendingPlatformError::NotRentExempt.into());
         }
 
@@ -109,7 +158,6 @@ impl Processor {
             ],
         )?;
 
-
         let transfer_coins = spl_token::instruction::transfer(
             token_program.key,
             lender_spl_account.key,
@@ -128,6 +176,7 @@ impl Processor {
                 lender_account.clone(),
             ],
         )?;
+
 
         uninit_lending_pool_state.number_of_outstanding_loans = 0;
         uninit_lending_pool_state.lender = *lender_account.key;
@@ -192,11 +241,11 @@ impl Processor {
         }
 
         if lending_pool_state.status != LENDINGPOOL_OPEN {
-            return Err(LendingPlatformError::InvalidAccounts.into());
+            return Err(LendingPlatformError::LendingPoolNotOpen.into());
         }
 
         if lending_pool_state.coin_amount < arg.amount as u128 {
-            return Err(LendingPlatformError::InvalidAccounts.into());
+            return Err(LendingPlatformError::NotEnoughFundsInLendingPool.into());
         }
 
         // Lending account is associated with lender
@@ -228,7 +277,7 @@ impl Processor {
         }
 
         if chainlink_sol_usd_feed_account.key.to_string() != CHAINLINK_SOL_USD_FEED_ADDRESS {
-            return Err(LendingPlatformError::InvalidAccounts.into());
+            return Err(LendingPlatformError::InvalidSOLUSDFeed.into());
         }
 
         if *chainlink_feed_account.key != lending_pool_state.chainlink_feed_account {
@@ -334,7 +383,7 @@ impl Processor {
 
         let mut lending_pool_state = LendingPoolState::unpack(&lending_pool_account.data.borrow())?;
         if lending_pool_state.status != LENDINGPOOL_OPEN {
-            return Err(LendingPlatformError::InvalidAccounts.into());
+            return Err(LendingPlatformError::LendingPoolNotOpen.into());
         }
 
         let lending_pool_spl_data = spl_token::state::Account::unpack(&lending_pool_spl_account.data.borrow())?;
@@ -438,7 +487,7 @@ impl Processor {
 
         let mut lending_pool_state = LendingPoolState::unpack(&lending_pool_account.data.borrow())?;
         if lending_pool_state.status != LENDINGPOOL_OPEN {
-            return Err(LendingPlatformError::InvalidAccounts.into());
+            return Err(LendingPlatformError::LendingPoolNotOpen.into());
         }
 
         let mut loan_state = LoanState::unpack(&loan_account.data.borrow())?;
@@ -466,7 +515,7 @@ impl Processor {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
         if (loan_state.borrowed_on + loan_state.validity_till) < current_time as u64 {
-            return Err(LendingPlatformError::InvalidAccounts.into());
+            return Err(LendingPlatformError::StillValidLoan.into());
         }
 
         let transfer_amount = loan_state.collateral_lamports.try_into().map_err(|_e| LendingPlatformError::InvalidAccounts)?;
@@ -521,7 +570,7 @@ impl Processor {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
         if lending_pool_state.number_of_outstanding_loans > 0 {
-            return Err(LendingPlatformError::InvalidAccounts.into());
+            return Err(LendingPlatformError::LendingPoolHasOutstandingLoan.into());
         }
 
         let lending_pool_spl_data = spl_token::state::Account::unpack(&lending_pool_spl_account.data.borrow())?;

@@ -1,5 +1,5 @@
 use crate::error::LendingPlatformError;
-use crate::params::{NewLendingPool, NewLoan, PaybackLoan, DefaultLoan, CloseLending};
+use crate::params::{NewLendingPool, NewLoan, PaybackLoan, DefaultLoan, CloseLending, InitLendingPoolAccount};
 use solana_program::program_error::ProgramError;
 use solana_program::{
     instruction::{AccountMeta, Instruction},
@@ -9,6 +9,16 @@ use solana_program::{
 
 #[derive(Debug, PartialEq)]
 pub enum LendingPlatformInstructions {
+
+    /// Initiates lending pool pda account.
+    ///
+    /// 0. `[]` System account
+    /// 1. `[]` Rent sysvar account
+    /// 2. `[]` Lender account
+    /// 3. `[]` Empty lending pool pda account
+    InitLendingPoolAccount(InitLendingPoolAccount),
+
+
     /// Creates new lending pool, works by 1. Initialize the lending pool account
     /// 2. Initialize empty spl token account 3 with owner set to 2 and mint to 4.
     /// 3. Transfer coin from 1 to 3
@@ -80,49 +90,77 @@ impl LendingPlatformInstructions {
         let (tag, rest) = input.split_first().ok_or(LendingPlatformError::InvalidInstruction)?;
 
         match tag {
-            0 => Ok(Self::NewLendingPool(NewLendingPool::unpack(rest)?.0)),
-            1 => Ok(Self::NewLoan(NewLoan::unpack(rest)?.0)),
-            2 => Ok(Self::PaybackLoan(PaybackLoan::unpack(rest)?.0)),
-            3 => Ok(Self::DefaultLoan(DefaultLoan::unpack(rest)?.0)),
-            4 => Ok(Self::CloseLending(CloseLending::unpack(rest)?.0)),
+            0 => Ok(Self::InitLendingPoolAccount(InitLendingPoolAccount::unpack(rest)?.0)),
+            1 => Ok(Self::NewLendingPool(NewLendingPool::unpack(rest)?.0)),
+            2 => Ok(Self::NewLoan(NewLoan::unpack(rest)?.0)),
+            3 => Ok(Self::PaybackLoan(PaybackLoan::unpack(rest)?.0)),
+            4 => Ok(Self::DefaultLoan(DefaultLoan::unpack(rest)?.0)),
+            5 => Ok(Self::CloseLending(CloseLending::unpack(rest)?.0)),
             _ => Err(LendingPlatformError::InvalidInstruction.into()),
         }
     }
 
     pub fn pack(&self) -> Result<Vec<u8>, ProgramError> {
         match self {
-            LendingPlatformInstructions::NewLendingPool(params) => {
+            LendingPlatformInstructions::InitLendingPoolAccount(params) => {
                 let mut packed_instruction: Vec<u8> = Vec::with_capacity(params.len() + 1);
                 packed_instruction.push(0);
                 packed_instruction.extend(params.pack());
                 Ok(packed_instruction)
-            }
-            LendingPlatformInstructions::NewLoan(params) => {
+            },
+            LendingPlatformInstructions::NewLendingPool(params) => {
                 let mut packed_instruction: Vec<u8> = Vec::with_capacity(params.len() + 1);
                 packed_instruction.push(1);
                 packed_instruction.extend(params.pack());
                 Ok(packed_instruction)
             }
-            LendingPlatformInstructions::PaybackLoan(params) => {
+            LendingPlatformInstructions::NewLoan(params) => {
                 let mut packed_instruction: Vec<u8> = Vec::with_capacity(params.len() + 1);
                 packed_instruction.push(2);
                 packed_instruction.extend(params.pack());
                 Ok(packed_instruction)
-            },
-            LendingPlatformInstructions::DefaultLoan(params) => {
+            }
+            LendingPlatformInstructions::PaybackLoan(params) => {
                 let mut packed_instruction: Vec<u8> = Vec::with_capacity(params.len() + 1);
                 packed_instruction.push(3);
                 packed_instruction.extend(params.pack());
                 Ok(packed_instruction)
             },
-            LendingPlatformInstructions::CloseLending(params) => {
+            LendingPlatformInstructions::DefaultLoan(params) => {
                 let mut packed_instruction: Vec<u8> = Vec::with_capacity(params.len() + 1);
                 packed_instruction.push(4);
+                packed_instruction.extend(params.pack());
+                Ok(packed_instruction)
+            },
+            LendingPlatformInstructions::CloseLending(params) => {
+                let mut packed_instruction: Vec<u8> = Vec::with_capacity(params.len() + 1);
+                packed_instruction.push(5);
                 packed_instruction.extend(params.pack());
                 Ok(packed_instruction)
             }
         }
     }
+}
+
+pub fn init_lending_pool_account_data(
+    program_id: &Pubkey,
+    params: InitLendingPoolAccount,
+    system_program: &Pubkey,
+    lender_account: &Pubkey,
+) -> Result<Instruction, ProgramError> {
+    let data = LendingPlatformInstructions::InitLendingPoolAccount(params).pack()?;
+
+    let accounts = vec![
+        AccountMeta::new(*system_program, false),
+        AccountMeta::new(sysvar::rent::id(), false),
+        AccountMeta::new(*lender_account, false),
+    ];
+
+    Ok(Instruction {
+        program_id: *program_id,
+        data,
+        accounts,
+    })
 }
 
 pub fn new_lending_pool(
@@ -134,7 +172,7 @@ pub fn new_lending_pool(
     empty_lending_pool_spl_account: &Pubkey,
     chainlink_feed_account: &Pubkey,
     spl_mint_account: &Pubkey,
-    token_program: &Pubkey
+    token_program: &Pubkey,
 ) -> Result<Instruction, ProgramError> {
     let data = LendingPlatformInstructions::NewLendingPool(params).pack()?;
 

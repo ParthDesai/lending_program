@@ -5,6 +5,7 @@ edition = "2018"
 
 [features]
 no-entrypoint = []
+test-bpf = []
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -19,4 +20,10 @@ chainlink = { git = "https://github.com/smartcontractkit/chainlink-solana", pack
 
 [lib]
 crate-type = ["cdylib", "lib"]
+
+[dev-dependencies]
+solana-sdk = "1.7.4"
+solana-program-test = "1.7.4"
+tokio = { version = "1.0", features = ["macros"]}
+borsh = "0.9"
 
