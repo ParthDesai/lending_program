@@ -9,14 +9,14 @@ use solana_sdk::{account::Account, signature::Keypair, signature::Signer, system
 use solana_sdk::program_pack::Pack;
 use solana_sdk::transaction::TransactionError;
 use spl_token::{self, instruction::{initialize_mint, initialize_account, mint_to}, state};
-use lending_program::params::NewLendingPool;
+use lending_program::params::{CloseLending, DefaultLoan, NewLendingPool, NewLoan};
 use lending_program::entrypoint::process_instruction;
-use lending_program::instructions::new_lending_pool;
+use lending_program::instructions::{close_lending, default_loan, new_lending_pool, new_loan};
 use chainlink::state::{Aggregator, Config};
 use solana_program::borsh::get_packed_len;
 use borsh::ser::BorshSerialize;
 use solana_sdk::system_transaction::create_account;
-use lending_program::state::LendingPoolState;
+use lending_program::state::{LendingPoolState, LoanState, LOANSTATE_DEFAULTED};
 
 
 #[tokio::test]
@@ -27,29 +27,66 @@ async fn test_lending_program() {
     let token_to_usd_feed_pubkey = Pubkey::from_str("DinfGKkKxJsU3kFnj173zSRdXNhZxxgZY8YC5GCQYhsi").unwrap();
     let program_id = Pubkey::from_str("VestingbGKPFXCWuBvfkegQfZyiNwAJb9Ss623VQ5DA").unwrap();
 
+    let total_lending_amount = 500;
+    let loan_amount = 100;
+    let sol_to_usd_rate = 120u64;
+    let coin_to_usd_rate = 240u64;
+
+    let collateral_lamports = (((((100 * 240) * 100) / 60) / sol_to_usd_rate) + 1) * 100000000;
+    let borrower_initial_balance = 50000000000;
+
     let mint_authority = Keypair::new();
     let mint = Keypair::new();
 
     let lender_account = Keypair::new();
     let lender_token_account = Keypair::new();
+    let collateral_deposit_account = Keypair::new();
+    let spl_deposit_account = Keypair::new();
 
     let borrower_account = Keypair::new();
     let borrower_token_account = Keypair::new();
 
-    let mut arg = NewLendingPool{
-        total_lending_amount: 500,
-        max_payback_time: 400,
-        expected_apy: 10,
-        bump_seed: 0
-    };
     let lending_pool_pda_signer_seeds : &[&[_]] = &[
         b"lending_pool",
-        &lender_account.pubkey().to_bytes(),
+        &lender_token_account.pubkey().to_bytes(),
     ];
     let (pda_lending_pool_address, bump_seed) = Pubkey::find_program_address(lending_pool_pda_signer_seeds, &program_id);
-    arg.bump_seed = bump_seed;
+
+
+    let lending_pool_collateral_pda_signer_seeds : &[&[_]] = &[
+        b"lending_pool_collateral",
+        &lender_token_account.pubkey().to_bytes(),
+    ];
+    let (pda_lending_pool_collateral, lending_pool_collateral_bump_seed) = Pubkey::find_program_address(lending_pool_collateral_pda_signer_seeds, &program_id);
+
+    let mut lending_pool_arg = NewLendingPool{
+        total_lending_amount,
+        max_payback_time: 4000,
+        expected_apy: 10,
+        bump_seed
+    };
+
+    let loan_pda_signer_seeds : &[&[_]] = &[
+        b"loan_account",  &pda_lending_pool_address.to_bytes(),
+        &borrower_account.pubkey().to_bytes(),
+    ];
+    let (pda_loan_address, loan_bump_seed) = Pubkey::find_program_address(loan_pda_signer_seeds, &program_id);
+
+    let loan_account_collateral_pda_signer_seeds: &[&[_]]  = &[
+        b"loan_account_collateral",  &pda_lending_pool_address.to_bytes(),
+        &borrower_account.pubkey().to_bytes(),
+    ];
+    let (pda_loan_account_collateral, loan_account_collateral_bump_seed) = Pubkey::find_program_address(loan_account_collateral_pda_signer_seeds, &program_id);
+
+    let  loan_arg = NewLoan {
+        amount: loan_amount,
+        lending_pool_bump_seed: lending_pool_arg.bump_seed,
+        loan_bump_seed,
+        loan_collateral_bump_seed: loan_account_collateral_bump_seed
+    };
 
     let lending_pool_token_account = Keypair::new();
+    let loan_token_account = Keypair::new();
 
 
     let mut program_test = ProgramTest::new(
@@ -70,7 +107,7 @@ async fn test_lending_program() {
         updated_at: 0,
         owner: Default::default(),
         submissions: Default::default(),
-        answer: Some(120u128),
+        answer: Some(sol_to_usd_rate as u128),
     };
     let mut byte_vec = vec![0u8; 4096];
     let mut bytes = byte_vec.as_mut_slice();
@@ -97,6 +134,16 @@ async fn test_lending_program() {
     );
 
     program_test.add_account(
+        pda_loan_address,
+        Account {
+            lamports: 40000000,
+            data: Vec::from([0u8; LoanState::LEN]),
+            owner: program_id,
+            ..Account::default()
+        }
+    );
+
+    program_test.add_account(
         lender_account.pubkey(),
         Account {
             lamports: 50000000,
@@ -105,9 +152,27 @@ async fn test_lending_program() {
     );
 
     program_test.add_account(
+        borrower_account.pubkey(),
+        Account {
+            lamports: borrower_initial_balance,
+            ..Account::default()
+        }
+    );
+
+    program_test.add_account(
         lending_pool_token_account.pubkey(),
         Account {
             lamports: 50000000,
+            data: Vec::from([0u8; spl_token::state::Account::LEN]),
+            owner: spl_token::id(),
+            ..Account::default()
+        }
+    );
+
+    program_test.add_account(
+        loan_token_account.pubkey(),
+        Account{
+            lamports: 5000000,
             data: Vec::from([0u8; spl_token::state::Account::LEN]),
             owner: spl_token::id(),
             ..Account::default()
@@ -126,7 +191,7 @@ async fn test_lending_program() {
         updated_at: 0,
         owner: Default::default(),
         submissions: Default::default(),
-        answer: Some(240u128),
+        answer: Some(coin_to_usd_rate as u128),
     };
     let mut byte_vec = vec![0u8; 4096];
     let mut bytes = byte_vec.as_mut_slice();
@@ -143,24 +208,28 @@ async fn test_lending_program() {
 
 
     // Start and process transactions on the test network
-    let program_test_context = program_test.start_with_context().await;
-    let mut banks_client = program_test_context.banks_client;
-    let payer = program_test_context.payer;
-    let recent_blockhash = program_test_context.last_blockhash;
+    let mut program_test_context = program_test.start_with_context().await;
+    let recent_blockhash = program_test_context.last_blockhash.clone();
 
-    banks_client.process_transaction(mint_init_transaction(
-        &payer,
+    program_test_context.warp_to_slot(100).unwrap();
+
+    program_test_context.banks_client.process_transaction(mint_init_transaction(
+        &program_test_context.payer,
         &mint,
         &mint_authority,
         recent_blockhash
     )).await.unwrap();
 
-    banks_client.process_transaction(
-        create_token_account(&payer, &mint, recent_blockhash, &lender_token_account, &lender_account.pubkey())
+    program_test_context.banks_client.process_transaction(
+        create_token_account(&program_test_context.payer, &mint, recent_blockhash, &lender_token_account, &lender_account.pubkey())
     ).await.unwrap();
 
-    banks_client.process_transaction(
-        create_token_account(&payer, &mint, recent_blockhash, &borrower_token_account, &borrower_account.pubkey())
+    program_test_context.banks_client.process_transaction(
+        create_token_account(&program_test_context.payer, &mint, recent_blockhash, &borrower_token_account, &borrower_account.pubkey())
+    ).await.unwrap();
+
+    program_test_context.banks_client.process_transaction(
+        create_token_account(&program_test_context.payer, &mint, recent_blockhash, &spl_deposit_account, &collateral_deposit_account.pubkey())
     ).await.unwrap();
 
     let setup_instructions = [
@@ -176,23 +245,23 @@ async fn test_lending_program() {
 
     let mut setup_transaction = Transaction::new_with_payer(
         &setup_instructions,
-        Some(&payer.pubkey()),
+        Some(&program_test_context.payer.pubkey()),
     );
     setup_transaction.partial_sign(
         &[
-            &payer,
+            &program_test_context.payer,
             &mint_authority
         ],
         recent_blockhash
     );
 
-    banks_client.process_transaction(setup_transaction).await.unwrap();
+    program_test_context.banks_client.process_transaction(setup_transaction).await.unwrap();
 
 
     // Testing creating new lending pool
     let create_lending_pool_instruction = new_lending_pool(
         &program_id,
-        arg,
+        lending_pool_arg,
         &lender_account.pubkey(),
         &lender_token_account.pubkey(),
         &pda_lending_pool_address,
@@ -204,20 +273,20 @@ async fn test_lending_program() {
 
     let mut create_lending_pool_transaction = Transaction::new_with_payer(
         &[create_lending_pool_instruction],
-        Some(&payer.pubkey())
+        Some(&program_test_context.payer.pubkey())
     );
 
     create_lending_pool_transaction.partial_sign(
         &[
-            &payer,
+            &program_test_context.payer,
             &lender_account
         ],
         recent_blockhash
     );
 
-    banks_client.process_transaction(create_lending_pool_transaction).await.unwrap();
+    program_test_context.banks_client.process_transaction(create_lending_pool_transaction).await.unwrap();
 
-    let lending_pool_account = banks_client.get_account(pda_lending_pool_address).await.unwrap().unwrap();
+    let lending_pool_account = program_test_context.banks_client.get_account(pda_lending_pool_address).await.unwrap().unwrap();
     let lending_pool_state = LendingPoolState::unpack(&lending_pool_account.data[..LendingPoolState::LEN]).unwrap();
     if !lending_pool_state.initialized {
         panic!("Lending pool state need to be initialized");
@@ -225,21 +294,226 @@ async fn test_lending_program() {
     if lending_pool_state.lender != lender_account.pubkey() {
         panic!("Lending pool state's lender need to be correctly set. Expected: {}, Found: {}", lender_account.pubkey().to_string(), lending_pool_state.lender.to_string());
     }
-    if lending_pool_state.expected_apy != arg.expected_apy {
+    if lending_pool_state.expected_apy != lending_pool_arg.expected_apy {
         panic!("Expected apy is not matching");
     }
-    if lending_pool_state.max_payback_time != arg.max_payback_time {
+    if lending_pool_state.max_payback_time != lending_pool_arg.max_payback_time {
         panic!("Max payback time is not correct");
     }
-    if lending_pool_state.coin_amount != arg.total_lending_amount as u128 {
-        panic!("Lending pool state's coin amount is: {}, expected: {}", lending_pool_state.coin_amount, arg.total_lending_amount);
+    if lending_pool_state.coin_amount != lending_pool_arg.total_lending_amount as u128 {
+        panic!("Lending pool state's coin amount is: {}, expected: {}", lending_pool_state.coin_amount, lending_pool_arg.total_lending_amount);
+    }
+    if lending_pool_state.number_of_outstanding_loans != 0 {
+        panic!("Loan count should have been 0");
     }
 
-    let lending_pool_spl_account = banks_client.get_account(lending_pool_token_account.pubkey()).await.unwrap().unwrap();
+    let lending_pool_spl_account = program_test_context.banks_client.get_account(lending_pool_token_account.pubkey()).await.unwrap().unwrap();
     let lending_pool_spl_account_state = spl_token::state::Account::unpack(&lending_pool_spl_account.data[..spl_token::state::Account::LEN]).unwrap();
-    if lending_pool_spl_account_state.amount != arg.total_lending_amount {
+    if lending_pool_spl_account_state.amount != lending_pool_arg.total_lending_amount {
         panic!("Lending pool spl account must have lending amount allocated");
     }
+
+    let new_loan_instructions = new_loan(
+        &program_id,
+        loan_arg,
+        &lender_token_account.pubkey(),
+        &borrower_account.pubkey(),
+        &borrower_token_account.pubkey(),
+        &pda_lending_pool_address,
+        &lending_pool_token_account.pubkey(),
+        &pda_loan_address,
+        &loan_token_account.pubkey(),
+        &pda_loan_account_collateral,
+        &mint.pubkey(),
+        &token_to_usd_feed_pubkey,
+        &sol_to_usd_feed_pubkey,
+        &spl_token::id(),
+        &solana_program::system_program::id()
+    ).unwrap();
+
+    let mut create_loan_transaction = Transaction::new_with_payer(
+        &[new_loan_instructions],
+        Some(&program_test_context.payer.pubkey())
+    );
+
+    create_loan_transaction.partial_sign(
+        &[
+            &program_test_context.payer,
+            &borrower_account
+        ],
+        recent_blockhash
+    );
+
+    program_test_context.banks_client.process_transaction(create_loan_transaction).await.unwrap();
+
+    let lending_pool_spl_account = program_test_context.banks_client.get_account(lending_pool_token_account.pubkey()).await.unwrap().unwrap();
+    let lending_pool_spl_account_state = spl_token::state::Account::unpack(&lending_pool_spl_account.data[..spl_token::state::Account::LEN]).unwrap();
+    if lending_pool_spl_account_state.amount != (lending_pool_arg.total_lending_amount - loan_amount) {
+        panic!("Lending pool spl account must have lending amount allocated");
+    }
+
+
+    let loan_account = program_test_context.banks_client.get_account(pda_loan_address).await.unwrap().unwrap();
+    let loan_state = LoanState::unpack(&loan_account.data[..LoanState::LEN]).unwrap();
+    if !loan_state.initialized {
+        panic!("Loan state is not initialized");
+    }
+    if loan_state.borrower != borrower_account.pubkey() {
+        panic!("Loan state has incorrect lender set");
+    }
+    if loan_state.amount != loan_arg.amount {
+        panic!("Coin amount in loan state does not match actual loan arg");
+    }
+    if loan_state.collateral_lamports != collateral_lamports as u128 {
+        panic!("Collateral amount in loan state does not match");
+    }
+
+
+    let borrower_token_account = program_test_context.banks_client.get_account(borrower_token_account.pubkey()).await.unwrap().unwrap();
+    let borrower_token_account_state = spl_token::state::Account::unpack(&borrower_token_account.data[..spl_token::state::Account::LEN]).unwrap();
+    if borrower_token_account_state.amount != loan_arg.amount {
+        panic!("Lending pool spl account must have lending amount allocated");
+    }
+
+
+    let borrower_account_balance = program_test_context.banks_client.get_balance(borrower_account.pubkey()).await.unwrap();
+    if borrower_account_balance != borrower_initial_balance - collateral_lamports {
+        panic!("Borrower account balance is not correct");
+    }
+
+    let lending_pool_account = program_test_context.banks_client.get_account(pda_lending_pool_address).await.unwrap().unwrap();
+    let new_lending_pool_state = LendingPoolState::unpack(&lending_pool_account.data[..LendingPoolState::LEN]).unwrap();
+    if new_lending_pool_state.number_of_outstanding_loans != 1 {
+        panic!("Number of outstanding loan should be 1");
+    }
+    if new_lending_pool_state.coin_amount != lending_pool_state.coin_amount - loan_state.amount as u128 {
+        panic!("Coin amount should be initial amount minus loan state amount");
+    }
+
+    let loan_collateral_balance = program_test_context.banks_client.get_balance(pda_loan_account_collateral).await.unwrap();
+    if loan_collateral_balance != collateral_lamports {
+        panic!("Loan collateral's balance does not match collateral lamport account");
+    }
+
+    program_test_context.warp_to_slot(100000).unwrap();
+
+    let default_loan_instruction = default_loan(
+        &program_id,
+        DefaultLoan { lending_pool_bump_seed: lending_pool_arg.bump_seed, loan_bump_seed, lending_pool_collateral_seed: lending_pool_collateral_bump_seed, loan_collateral_seed: loan_account_collateral_bump_seed },
+        &lender_token_account.pubkey(),
+        &pda_lending_pool_address,
+        &pda_lending_pool_collateral,
+        &pda_loan_address,
+        &pda_loan_account_collateral,
+        &borrower_account.pubkey(),
+        &solana_program::system_program::id()
+    ).unwrap();
+
+
+    let mut default_loan_transaction = Transaction::new_with_payer(
+        &[default_loan_instruction],
+        Some(&program_test_context.payer.pubkey())
+    );
+
+    default_loan_transaction.partial_sign(
+        &[
+            &program_test_context.payer,
+        ],
+        recent_blockhash
+    );
+
+    program_test_context.banks_client.process_transaction(default_loan_transaction).await.unwrap();
+
+    let lending_pool_account = program_test_context.banks_client.get_account(pda_lending_pool_address).await.unwrap().unwrap();
+    let defaulted_lending_pool_state = LendingPoolState::unpack(&lending_pool_account.data[..LendingPoolState::LEN]).unwrap();
+    if defaulted_lending_pool_state.number_of_outstanding_loans != 0 {
+        panic!("There should not be any outstanding loans");
+    }
+    if defaulted_lending_pool_state.coin_amount != lending_pool_state.coin_amount - loan_state.amount as u128 {
+        panic!("Defaulted lending pool should not get any tokens back.");
+    }
+    if defaulted_lending_pool_state.collateral_amount != collateral_lamports as u128 {
+        panic!("Defaulted lending pool should have collateral amount");
+    }
+
+    let loan_collateral_balance = program_test_context.banks_client.get_balance(pda_loan_account_collateral).await.unwrap();
+    if loan_collateral_balance != 0 {
+        panic!("Loan collateral's balance should be zero as it should be transferred to the lending pool collateral");
+    }
+
+    let lending_pool_collateral_balance = program_test_context.banks_client.get_balance(pda_lending_pool_collateral).await.unwrap();
+    if lending_pool_collateral_balance != collateral_lamports {
+        panic!("Lending pool collateral balance should be equal to collateral");
+    }
+
+    let loan_account = program_test_context.banks_client.get_account(pda_loan_address).await.unwrap().unwrap();
+    let loan_state = LoanState::unpack(&loan_account.data[..LoanState::LEN]).unwrap();
+    if !loan_state.initialized {
+        panic!("Loan state is not initialized");
+    }
+    if loan_state.borrower != borrower_account.pubkey() {
+        panic!("Loan state has incorrect lender set");
+    }
+    if loan_state.amount != loan_arg.amount {
+        panic!("Coin amount in loan state does not match actual loan arg");
+    }
+    if loan_state.collateral_lamports != collateral_lamports as u128 {
+        panic!("Collateral amount in loan state does not match");
+    }
+    if loan_state.status != LOANSTATE_DEFAULTED {
+        panic!("Loan state should be defaulted");
+    }
+
+    let close_lending_instruction = close_lending(
+        &program_id,
+        CloseLending {
+            lending_pool_bump_seed: lending_pool_arg.bump_seed,
+            lending_pool_collateral_seed: lending_pool_collateral_bump_seed
+        },
+        &lender_account.pubkey(),
+        &lender_token_account.pubkey(),
+        &pda_lending_pool_address,
+        &lending_pool_token_account.pubkey(),
+        &pda_lending_pool_collateral,
+        &spl_deposit_account.pubkey(),
+        &mint.pubkey(),
+        &collateral_deposit_account.pubkey(),
+        &spl_token::id(),
+        &solana_program::system_program::id()
+    ).unwrap();
+
+    let mut close_lending_account_transaction = Transaction::new_with_payer(
+        &[close_lending_instruction],
+        Some(&program_test_context.payer.pubkey())
+    );
+
+    close_lending_account_transaction.partial_sign(
+        &[
+            &program_test_context.payer,
+            &lender_account
+        ],
+        recent_blockhash
+    );
+
+    program_test_context.banks_client.process_transaction(close_lending_account_transaction).await.unwrap();
+
+    let lending_pool_collateral_balance = program_test_context.banks_client.get_balance(pda_lending_pool_collateral).await.unwrap();
+    if lending_pool_collateral_balance != 0 {
+        panic!("Lending pool collateral balance should be equal to zero");
+    }
+
+    let collateral_depost_account_balance = program_test_context.banks_client.get_balance(collateral_deposit_account.pubkey()).await.unwrap();
+    if collateral_depost_account_balance != collateral_lamports {
+        panic!("Collateral deposit balance should be equal to collateral lamports");
+    }
+
+    let spl_deposit_account = program_test_context.banks_client.get_account(spl_deposit_account.pubkey()).await.unwrap().unwrap();
+    let spl_deposit_account_state = spl_token::state::Account::unpack(&spl_deposit_account.data[..spl_token::state::Account::LEN]).unwrap();
+    if spl_deposit_account_state.amount != lending_pool_arg.total_lending_amount - loan_arg.amount {
+        panic!("Spl deposit amount must be equal to lending pool's total lending amount - loaned amount");
+    }
+
+
 }
 
 fn mint_init_transaction(

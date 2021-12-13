@@ -3,6 +3,43 @@ use arrayref::{array_ref, array_refs, mut_array_refs};
 use solana_program::program_error::ProgramError;
 
 #[derive(Debug, PartialEq)]
+pub struct InitLoanAccount {
+    pub loan_bump_seed: u8
+}
+
+impl InitLoanAccount {
+    const LEN: usize = 1;
+
+    pub fn len(&self) -> usize {
+        Self::LEN
+    }
+
+    pub fn unpack(instruction_data: &[u8]) -> Result<(Self, &[u8]), ProgramError> {
+        if instruction_data.len() < InitLoanAccount::LEN {
+            return Err(LendingPlatformError::InvalidInstruction.into());
+        }
+
+        let (data, rest) = instruction_data.split_at(InitLoanAccount::LEN);
+        let src = array_ref![data, 0, InitLoanAccount::LEN];
+
+        let bump_seed = src[0];
+
+        Ok((InitLoanAccount{
+            loan_bump_seed: bump_seed
+        }, rest))
+    }
+
+    pub fn pack(&self) -> Vec<u8> {
+        let mut dst = [0u8; InitLoanAccount::LEN];
+
+        dst[0] = self.loan_bump_seed;
+
+        dst.to_vec()
+    }
+
+}
+
+#[derive(Debug, PartialEq)]
 pub struct InitLendingPoolAccount {
     pub bump_seed: u8
 }
@@ -92,15 +129,16 @@ impl NewLendingPool {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub struct NewLoan {
     pub amount: u64,
     pub lending_pool_bump_seed: u8,
-    pub loan_bump_seed: u8
+    pub loan_bump_seed: u8,
+    pub loan_collateral_bump_seed: u8
 }
 
 impl NewLoan {
-    const LEN: usize = 10;
+    const LEN: usize = 11;
 
     pub fn len(&self) -> usize {
         Self::LEN
@@ -114,28 +152,31 @@ impl NewLoan {
         let (data, rest) = instruction_data.split_at(NewLoan::LEN);
         let src = array_ref![data, 0, NewLoan::LEN];
 
-        let (amount_src, lending_pool_bump_seed_src, loan_bump_seed_src) = array_refs![src, 8, 1, 1];
+        let (amount_src, lending_pool_bump_seed_src, loan_bump_seed_src, loan_collateral_bump_seed_src) = array_refs![src, 8, 1, 1, 1];
 
         let amount = u64::from_le_bytes(*amount_src);
         let lending_pool_bump_seed = lending_pool_bump_seed_src[0];
         let loan_bump_seed = loan_bump_seed_src[0];
+        let loan_collateral_bump_seed = loan_collateral_bump_seed_src[0];
 
 
         Ok((NewLoan{
             amount,
             lending_pool_bump_seed,
-            loan_bump_seed
+            loan_bump_seed,
+            loan_collateral_bump_seed
         }, rest))
     }
 
     pub fn pack(&self) -> Vec<u8> {
         let mut dst = [0u8; NewLoan::LEN];
 
-        let (amount_dest, lending_pool_bump_seed_dst, loan_bump_seed_dst) = mut_array_refs![&mut dst, 8, 1, 1];
+        let (amount_dest, lending_pool_bump_seed_dst, loan_bump_seed_dst, loan_collateral_bump_seed_dst) = mut_array_refs![&mut dst, 8, 1, 1, 1];
 
         amount_dest.copy_from_slice(&self.amount.to_le_bytes());
         lending_pool_bump_seed_dst[0] = self.lending_pool_bump_seed;
         loan_bump_seed_dst[0] = self.loan_bump_seed;
+        loan_collateral_bump_seed_dst[0] = self.loan_collateral_bump_seed;
 
         dst.to_vec()
     }
@@ -143,12 +184,14 @@ impl NewLoan {
 
 #[derive(Debug, PartialEq)]
 pub struct PaybackLoan {
-    pub(crate) loan_bump_seed: u8
+    pub lending_pool_bump_seed: u8,
+    pub loan_bump_seed: u8,
+    pub loan_collateral_bump_seed: u8
 }
 
 
 impl PaybackLoan {
-    const LEN: usize = 1;
+    const LEN: usize = 3;
 
     pub fn len(&self) -> usize {
         Self::LEN
@@ -162,17 +205,23 @@ impl PaybackLoan {
         let (data, rest) = instruction_data.split_at(PaybackLoan::LEN);
         let src = array_ref![data, 0, PaybackLoan::LEN];
 
-        let loan_bump_seed = src[0];
+        let lending_pool_bump_seed = src[0];
+        let loan_bump_seed = src[1];
+        let loan_collateral_bump_seed = src[2];
 
         Ok((PaybackLoan {
-            loan_bump_seed
+            lending_pool_bump_seed,
+            loan_bump_seed,
+            loan_collateral_bump_seed
         }, rest))
     }
 
     pub fn pack(&self) -> Vec<u8> {
         let mut dst = [0u8; PaybackLoan::LEN];
 
-        dst[0] = self.loan_bump_seed;
+        dst[0] = self.lending_pool_bump_seed;
+        dst[1] = self.loan_bump_seed;
+        dst[2] = self.loan_collateral_bump_seed;
 
         dst.to_vec()
     }
@@ -180,11 +229,14 @@ impl PaybackLoan {
 
 #[derive(Debug, PartialEq)]
 pub struct DefaultLoan {
-    pub(crate) loan_bump_seed: u8
+    pub lending_pool_bump_seed: u8,
+    pub loan_bump_seed: u8,
+    pub lending_pool_collateral_seed: u8,
+    pub loan_collateral_seed: u8
 }
 
 impl DefaultLoan {
-    const LEN: usize = 1;
+    const LEN: usize = 4;
 
     pub fn len(&self) -> usize {
         Self::LEN
@@ -198,17 +250,26 @@ impl DefaultLoan {
         let (data, rest) = instruction_data.split_at(DefaultLoan::LEN);
         let src = array_ref![data, 0, DefaultLoan::LEN];
 
-        let loan_bump_seed = src[0];
+        let lending_pool_bump_seed = src[0];
+        let loan_bump_seed = src[1];
+        let lending_pool_collateral_seed = src[2];
+        let loan_collateral_seed = src[3];
 
         Ok((DefaultLoan {
-            loan_bump_seed
+            lending_pool_bump_seed,
+            loan_bump_seed,
+            lending_pool_collateral_seed,
+            loan_collateral_seed
         }, rest))
     }
 
     pub fn pack(&self) -> Vec<u8> {
         let mut dst = [0u8; DefaultLoan::LEN];
 
-        dst[0] = self.loan_bump_seed;
+        dst[0] = self.lending_pool_bump_seed;
+        dst[1] = self.loan_bump_seed;
+        dst[2] = self.lending_pool_collateral_seed;
+        dst[3] = self.loan_collateral_seed;
 
         dst.to_vec()
     }
@@ -216,11 +277,12 @@ impl DefaultLoan {
 
 #[derive(Debug, PartialEq)]
 pub struct CloseLending {
-    pub(crate) lending_pool_bump_seed: u8
+    pub lending_pool_bump_seed: u8,
+    pub lending_pool_collateral_seed: u8
 }
 
 impl CloseLending {
-    const LEN: usize = 1;
+    const LEN: usize = 2;
 
     pub fn len(&self) -> usize {
         Self::LEN
@@ -235,9 +297,11 @@ impl CloseLending {
         let src = array_ref![data, 0, CloseLending::LEN];
 
         let lending_pool_bump_seed = src[0];
+        let lending_pool_collateral_seed = src[1];
 
         Ok((CloseLending {
-            lending_pool_bump_seed
+            lending_pool_bump_seed,
+            lending_pool_collateral_seed
         }, rest))
     }
 
@@ -245,6 +309,7 @@ impl CloseLending {
         let mut dst = [0u8; CloseLending::LEN];
 
         dst[0] = self.lending_pool_bump_seed;
+        dst[1] = self.lending_pool_collateral_seed;
 
         dst.to_vec()
     }

@@ -1,6 +1,6 @@
 use crate::error::LendingPlatformError;
 use crate::instructions::{LendingPlatformInstructions};
-use crate::params::{NewLoan, NewLendingPool, PaybackLoan, DefaultLoan, CloseLending, InitLendingPoolAccount};
+use crate::params::{NewLoan, NewLendingPool, PaybackLoan, DefaultLoan, CloseLending, InitLendingPoolAccount, InitLoanAccount};
 use crate::state::{LendingPoolState, LoanState, LENDINGPOOL_OPEN, LOANSTATE_LOANED, LOANSTATE_PAYEDBACK, LOANSTATE_DEFAULTED, LENDINGPOOL_CLOSE};
 use solana_program::account_info::{next_account_info, AccountInfo};
 use solana_program::entrypoint::ProgramResult;
@@ -30,12 +30,67 @@ impl Processor {
 
         match instruction {
             LendingPlatformInstructions::InitLendingPoolAccount(arg) => Self::process_init_lending_pool(program_id, accounts, arg),
+            LendingPlatformInstructions::InitLoanAccount(arg) => Self::process_init_loan(program_id, accounts, arg),
             LendingPlatformInstructions::NewLoan(arg) => Self::new_loan(program_id, accounts, arg),
             LendingPlatformInstructions::NewLendingPool(arg) => Self::new_lending_pool(program_id, accounts, arg),
             LendingPlatformInstructions::PaybackLoan(arg) => Self::payback_loan(program_id, accounts, arg),
             LendingPlatformInstructions::DefaultLoan(arg) => Self::default_loan(program_id, accounts, arg),
             LendingPlatformInstructions::CloseLending(arg) => Self::close_lending(program_id, accounts, arg),
         }
+    }
+
+    pub fn process_init_loan(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        arg: InitLoanAccount
+    ) -> ProgramResult {
+        let accounts_iter = &mut accounts.iter();
+
+        let system_program = next_account_info(accounts_iter)?;
+        let rent_sysvar_account = next_account_info(accounts_iter)?;
+        let lending_pool_account = next_account_info(accounts_iter)?;
+        let borrower_account = next_account_info(accounts_iter)?;
+        let empty_loan_account = next_account_info(accounts_iter)?;
+
+        let rent = Rent::from_account_info(rent_sysvar_account)?;
+
+        if !borrower_account.is_signer {
+            return Err(LendingPlatformError::IncorrectSigner.into());
+        }
+
+        let borrow_account_bytes = borrower_account.key.to_bytes();
+        let lending_pool_account_bytes = lending_pool_account.key.to_bytes();
+        let loan_account_pda_signer_seeds: &[&[_]]  = &[
+            b"loan_account",  &lending_pool_account_bytes,
+            &borrow_account_bytes,
+            &[arg.loan_bump_seed]
+        ];
+
+        let pda_loan_account = Pubkey::create_program_address(loan_account_pda_signer_seeds, program_id)?;
+        if pda_loan_account != *empty_loan_account.key {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+
+
+        let init_loan_account = create_account(
+            &borrower_account.key,
+            &empty_loan_account.key,
+            rent.minimum_balance(LoanState::LEN),
+            LoanState::LEN as u64,
+            &program_id,
+        );
+
+        invoke_signed(
+            &init_loan_account,
+            &[
+                system_program.clone(),
+                borrower_account.clone(),
+                empty_loan_account.clone(),
+            ],
+            &[&loan_account_pda_signer_seeds],
+        )?;
+
+        Ok(())
     }
 
     pub fn process_init_lending_pool(
@@ -48,14 +103,24 @@ impl Processor {
         let system_program = next_account_info(accounts_iter)?;
         let rent_sysvar_account = next_account_info(accounts_iter)?;
         let lender_account = next_account_info(accounts_iter)?;
+        let lender_spl_account = next_account_info(accounts_iter)?;
         let empty_lending_pool_account = next_account_info(accounts_iter)?;
+
+        let lender_spl_data = spl_token::state::Account::unpack(&lender_spl_account.data.borrow())?;
+        if lender_spl_data.owner != *lender_account.key {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+
+        if !lender_account.is_signer {
+            return Err(LendingPlatformError::IncorrectSigner.into());
+        }
 
         let rent = Rent::from_account_info(rent_sysvar_account)?;
 
-        let lender_account_bytes = lender_account.key.to_bytes();
+        let lender_spl_account_bytes = lender_spl_account.key.to_bytes();
         let lending_pool_pda_signer_seeds : &[&[_]] = &[
             b"lending_pool",
-            &lender_account_bytes,
+            &lender_spl_account_bytes,
             &[arg.bump_seed]
         ];
         let pda_lending_pool = Pubkey::create_program_address(lending_pool_pda_signer_seeds, program_id)?;
@@ -108,10 +173,10 @@ impl Processor {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
 
-        let lender_account_bytes = lender_account.key.to_bytes();
+        let lender_spl_account_bytes = lender_spl_account.key.to_bytes();
         let lending_pool_pda_signer_seeds : &[&[_]] = &[
             b"lending_pool",
-            &lender_account_bytes,
+            &lender_spl_account_bytes,
             &[arg.bump_seed]
         ];
         let pda_lending_pool = Pubkey::create_program_address(lending_pool_pda_signer_seeds, program_id)?;
@@ -196,13 +261,14 @@ impl Processor {
 
     pub fn new_loan(program_id: &Pubkey, accounts: &[AccountInfo], arg: NewLoan) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
+        let lender_spl_account = next_account_info(account_info_iter)?;
         let borrower_account = next_account_info(account_info_iter)?;
         let borrower_spl_account = next_account_info(account_info_iter)?;
         let lending_pool_account = next_account_info(account_info_iter)?;
         let lending_pool_spl_account = next_account_info(account_info_iter)?;
-        let lender_account = next_account_info(account_info_iter)?;
         let empty_loan_account = next_account_info(account_info_iter)?;
         let empty_loan_spl_account = next_account_info(account_info_iter)?;
+        let loan_collateral_account = next_account_info(account_info_iter)?;
         let spl_mint = next_account_info(account_info_iter)?;
         let chainlink_feed_account = next_account_info(account_info_iter)?;
         let chainlink_sol_usd_feed_account = next_account_info(account_info_iter)?;
@@ -211,6 +277,7 @@ impl Processor {
         let clock_sysvar = next_account_info(account_info_iter)?;
         let clock = &Clock::from_account_info(clock_sysvar)?;
         let token_program = next_account_info(account_info_iter)?;
+        let system_program = next_account_info(account_info_iter)?;
 
         if !borrower_account.is_signer {
             return Err(LendingPlatformError::IncorrectSigner.into());
@@ -223,10 +290,10 @@ impl Processor {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
 
-        let lender_account_bytes = lender_account.key.to_bytes();
+        let lender_spl_account_bytes = lender_spl_account.key.to_bytes();
         let lending_pool_pda_signer_seeds : &[&[_]] = &[
             b"lending_pool",
-            &lender_account_bytes,
+            &lender_spl_account_bytes,
             &[arg.lending_pool_bump_seed]
         ];
         let lending_pool_pda = Pubkey::create_program_address(lending_pool_pda_signer_seeds, program_id)?;
@@ -260,6 +327,16 @@ impl Processor {
         ];
         let pda_loan_account = Pubkey::create_program_address(loan_account_pda_signer_seeds, program_id)?;
         if pda_loan_account != *empty_loan_account.key {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+
+        let loan_account_collateral_pda_signer_seeds: &[&[_]]  = &[
+            b"loan_account_collateral",  &lending_pool_account_bytes,
+            &borrow_account_bytes,
+            &[arg.loan_collateral_bump_seed]
+        ];
+        let pda_loan_account_collateral = Pubkey::create_program_address(loan_account_collateral_pda_signer_seeds, program_id)?;
+        if pda_loan_account_collateral != *loan_collateral_account.key {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
 
@@ -299,6 +376,8 @@ impl Processor {
         let target_usd = arg.amount as u128 * stablecoin_to_usd_conversion_rate;
         let collateral_usd = (100 * target_usd) / 60;
 
+        msg!("Stable coin to usd conversion rate is: {}, target_usd: {}, collateral_usd: {}, sol_to_usd_conversion_rate: {}, collateral_sols: {}", stablecoin_to_usd_conversion_rate, target_usd, collateral_usd, sol_to_usd_conversion_rate, collateral_usd / sol_to_usd_conversion_rate);
+
         // This much sols need to be taken from the borrower account
         let collateral_sols = (collateral_usd / sol_to_usd_conversion_rate) + 1;
         let collateral_lamports = collateral_sols.checked_mul(SOL_TO_LAMPORT_MULTIPLIER);
@@ -308,12 +387,13 @@ impl Processor {
 
         let collateral_lamports = collateral_lamports.unwrap();
         let transfer_amount = collateral_lamports.try_into().map_err(|_e| LendingPlatformError::InvalidAccounts)?;
-        let collateral_transfer_instruction = system_transfer(borrower_account.key, empty_loan_account.key, transfer_amount);
+        let collateral_transfer_instruction = system_transfer(borrower_account.key, loan_collateral_account.key, transfer_amount);
         invoke(
             &collateral_transfer_instruction,
             &[
+                system_program.clone(),
                 borrower_account.clone(),
-                empty_loan_account.clone()
+                loan_collateral_account.clone()
             ]
         )?;
 
@@ -359,16 +439,19 @@ impl Processor {
 
     pub fn payback_loan(program_id: &Pubkey, accounts: &[AccountInfo], arg: PaybackLoan) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
+        let lender_spl_account = next_account_info(account_info_iter)?;
         let borrower_account = next_account_info(account_info_iter)?;
         let borrower_spl_account = next_account_info(account_info_iter)?;
         let lending_pool_account = next_account_info(account_info_iter)?;
         let lending_pool_spl_account = next_account_info(account_info_iter)?;
         let loan_account = next_account_info(account_info_iter)?;
         let loan_spl_account = next_account_info(account_info_iter)?;
+        let loan_collateral_account = next_account_info(account_info_iter)?;
         let spl_mint = next_account_info(account_info_iter)?;
         let clock_sysvar = next_account_info(account_info_iter)?;
         let clock = &Clock::from_account_info(clock_sysvar)?;
         let token_program = next_account_info(account_info_iter)?;
+        let system_program = next_account_info(account_info_iter)?;
 
         if !borrower_account.is_signer {
             return Err(LendingPlatformError::IncorrectSigner.into());
@@ -394,6 +477,20 @@ impl Processor {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
 
+        let lender_spl_account_bytes = lender_spl_account.key.to_bytes();
+        let lending_pool_pda_signer_seeds : &[&[_]] = &[
+            b"lending_pool",
+            &lender_spl_account_bytes,
+            &[arg.lending_pool_bump_seed]
+        ];
+        let lending_pool_pda = Pubkey::create_program_address(lending_pool_pda_signer_seeds, program_id)?;
+        if lending_pool_pda != *lending_pool_account.key {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+        if lending_pool_account.owner != program_id {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+
         // Lending account is associated with lender
         // loan account is associated with lending account and borrower
         let borrow_account_bytes = borrower_account.key.to_bytes();
@@ -405,6 +502,19 @@ impl Processor {
         ];
         let pda_loan_account = Pubkey::create_program_address(loan_account_pda_signer_seeds, program_id)?;
         if pda_loan_account != *loan_account.key {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+        if loan_account.owner != program_id {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+
+        let loan_account_collateral_pda_signer_seeds: &[&[_]]  = &[
+            b"loan_account_collateral",  &lending_pool_account_bytes,
+            &borrow_account_bytes,
+            &[arg.loan_collateral_bump_seed]
+        ];
+        let pda_loan_account_collateral = Pubkey::create_program_address(loan_account_collateral_pda_signer_seeds, program_id)?;
+        if pda_loan_account_collateral != *loan_collateral_account.key {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
 
@@ -455,14 +565,15 @@ impl Processor {
 
 
         let transfer_amount = loan_state.collateral_lamports.try_into().map_err(|_e| LendingPlatformError::InvalidAccounts)?;
-        let collateral_transfer_instruction = system_transfer(loan_account.key, borrower_account.key, transfer_amount);
+        let collateral_transfer_instruction = system_transfer(loan_collateral_account.key, borrower_account.key, transfer_amount);
         invoke_signed(
             &collateral_transfer_instruction,
             &[
-                loan_account.clone(),
+                system_program.clone(),
+                loan_collateral_account.clone(),
                 borrower_account.clone()
             ],
-            &[&loan_account_pda_signer_seeds]
+            &[&loan_account_collateral_pda_signer_seeds]
         )?;
 
 
@@ -479,10 +590,15 @@ impl Processor {
 
     pub fn default_loan(program_id: &Pubkey, accounts: &[AccountInfo], arg: DefaultLoan) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
+        let lender_spl_account = next_account_info(account_info_iter)?;
         let lending_pool_account = next_account_info(account_info_iter)?;
+        let lending_pool_collateral_account = next_account_info(account_info_iter)?;
         let loan_account = next_account_info(account_info_iter)?;
+        let loan_collateral_account = next_account_info(account_info_iter)?;
         let borrower_account = next_account_info(account_info_iter)?;
         let clock_sysvar = next_account_info(account_info_iter)?;
+        let system_program = next_account_info(account_info_iter)?;
+
         let clock = &Clock::from_account_info(&clock_sysvar)?;
 
         let mut lending_pool_state = LendingPoolState::unpack(&lending_pool_account.data.borrow())?;
@@ -493,6 +609,20 @@ impl Processor {
         let mut loan_state = LoanState::unpack(&loan_account.data.borrow())?;
 
         if loan_state.lending_account != *lending_pool_account.key {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+
+        let lender_spl_account_bytes = lender_spl_account.key.to_bytes();
+        let lending_pool_pda_signer_seeds : &[&[_]] = &[
+            b"lending_pool",
+            &lender_spl_account_bytes,
+            &[arg.lending_pool_bump_seed]
+        ];
+        let lending_pool_pda = Pubkey::create_program_address(lending_pool_pda_signer_seeds, program_id)?;
+        if lending_pool_pda != *lending_pool_account.key {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+        if lending_pool_account.owner != program_id {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
 
@@ -509,24 +639,38 @@ impl Processor {
         if pda_loan_account != *loan_account.key {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
+        if loan_account.owner != program_id {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+
+        let loan_account_collateral_pda_signer_seeds: &[&[_]]  = &[
+            b"loan_account_collateral",  &lending_pool_account_bytes,
+            &borrow_account_bytes,
+            &[arg.loan_collateral_seed]
+        ];
+        let pda_loan_account_collateral = Pubkey::create_program_address(loan_account_collateral_pda_signer_seeds, program_id)?;
+        if pda_loan_account_collateral != *loan_collateral_account.key {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
 
         let current_time = clock.unix_timestamp;
         if current_time < 0 {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
-        if (loan_state.borrowed_on + loan_state.validity_till) < current_time as u64 {
+        if (loan_state.borrowed_on + loan_state.validity_till) > current_time as u64 {
             return Err(LendingPlatformError::StillValidLoan.into());
         }
 
         let transfer_amount = loan_state.collateral_lamports.try_into().map_err(|_e| LendingPlatformError::InvalidAccounts)?;
-        let collateral_transfer_instruction = system_transfer(loan_account.key, lending_pool_account.key,  transfer_amount);
+        let collateral_transfer_instruction = system_transfer(loan_collateral_account.key, lending_pool_collateral_account.key,  transfer_amount);
         invoke_signed(
             &collateral_transfer_instruction,
             &[
-                loan_account.clone(),
-                lending_pool_account.clone()
+                system_program.clone(),
+                loan_collateral_account.clone(),
+                lending_pool_collateral_account.clone()
             ],
-            &[&loan_account_pda_signer_seeds]
+            &[&loan_account_collateral_pda_signer_seeds]
         )?;
 
         lending_pool_state.collateral_amount += loan_state.collateral_lamports;
@@ -542,26 +686,33 @@ impl Processor {
     pub fn close_lending(program_id: &Pubkey, accounts: &[AccountInfo], arg: CloseLending) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let lender_account = next_account_info(account_info_iter)?;
+        let lender_spl_account = next_account_info(account_info_iter)?;
         let lending_pool_account = next_account_info(account_info_iter)?;
         let lending_pool_spl_account = next_account_info(account_info_iter)?;
-        let deposit_spl_account = next_account_info(account_info_iter)?;
+        let lending_pool_collateral_account = next_account_info(account_info_iter)?;
+        let spl_deposit_account = next_account_info(account_info_iter)?;
         let spl_mint_account = next_account_info(account_info_iter)?;
-        let default_account = next_account_info(account_info_iter)?;
+        let collateral_deposit_account = next_account_info(account_info_iter)?;
         let token_program = next_account_info(account_info_iter)?;
+        let system_program = next_account_info(account_info_iter)?;
 
         if !lender_account.is_signer {
             return Err(LendingPlatformError::IncorrectSigner.into());
         }
 
-        let lender_account_bytes = lender_account.key.to_bytes();
+        let lender_spl_account_bytes = lender_spl_account.key.to_bytes();
         let lending_pool_pda_signer_seeds : &[&[_]] = &[
             b"lending_pool",
-            &lender_account_bytes,
+            &lender_spl_account_bytes,
             &[arg.lending_pool_bump_seed]
         ];
         let pda_lending_pool = Pubkey::create_program_address(lending_pool_pda_signer_seeds, program_id)?;
 
         if *lending_pool_account.key != pda_lending_pool {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+
+        if lending_pool_account.owner != program_id {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
 
@@ -581,26 +732,39 @@ impl Processor {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
 
-        let deposit_account_spl_data = spl_token::state::Account::unpack(&deposit_spl_account.data.borrow())?;
+        let deposit_account_spl_data = spl_token::state::Account::unpack(&spl_deposit_account.data.borrow())?;
         if deposit_account_spl_data.mint != *spl_mint_account.key {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
 
+        let lender_spl_account_bytes = lender_spl_account.key.to_bytes();
+        let lending_pool_collateral_pda_signer_seeds : &[&[_]] = &[
+            b"lending_pool_collateral",
+            &lender_spl_account_bytes,
+            &[arg.lending_pool_collateral_seed]
+        ];
+        let pda_lending_pool_collateral = Pubkey::create_program_address(lending_pool_collateral_pda_signer_seeds, program_id)?;
+
+        if *lending_pool_collateral_account.key != pda_lending_pool_collateral {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+
         let transfer_amount = lending_pool_state.collateral_amount.try_into().map_err(|_e| LendingPlatformError::InvalidAccounts)?;
-        let collateral_transfer_instruction = system_transfer(lending_pool_account.key, default_account.key, transfer_amount);
+        let collateral_transfer_instruction = system_transfer(lending_pool_collateral_account.key, collateral_deposit_account.key, transfer_amount);
         invoke_signed(
             &collateral_transfer_instruction,
             &[
-                lending_pool_account.clone(),
-                default_account.clone()
+                system_program.clone(),
+                lending_pool_collateral_account.clone(),
+                collateral_deposit_account.clone()
             ],
-            &[&lending_pool_pda_signer_seeds]
+            &[&lending_pool_collateral_pda_signer_seeds]
         )?;
 
         let stablecoin_transfer_instruction = spl_token::instruction::transfer(
             token_program.key,
             lending_pool_spl_account.key,
-            deposit_spl_account.key,
+            spl_deposit_account.key,
             lending_pool_account.key,
             &[],
             lending_pool_state.coin_amount as u64
@@ -610,7 +774,7 @@ impl Processor {
             &[
                 token_program.clone(),
                 lending_pool_spl_account.clone(),
-                deposit_spl_account.clone(),
+                spl_deposit_account.clone(),
                 lending_pool_account.clone()
             ],
             &[&lending_pool_pda_signer_seeds]
