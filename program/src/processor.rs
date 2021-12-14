@@ -12,11 +12,12 @@ use solana_program::rent::Rent;
 use solana_program::sysvar::Sysvar;
 use solana_program::clock::Clock;
 use std::convert::TryInto;
+use num_traits::ToPrimitive;
 use solana_program::msg;
+use solana_sdk::timing::SECONDS_PER_YEAR;
 
 const CHAINLINK_SOL_USD_FEED_ADDRESS: &str = "FmAmfoyPXiA8Vhhe6MZTr3U6rZfEZ1ctEHay1ysqCqcf";
 const SOL_TO_LAMPORT_MULTIPLIER: u128 = 100000000;
-const YEAR_IN_SECONDS: u64 = 365 * 24 * 60 * 60;
 
 pub struct Processor;
 
@@ -267,7 +268,6 @@ impl Processor {
         let lending_pool_account = next_account_info(account_info_iter)?;
         let lending_pool_spl_account = next_account_info(account_info_iter)?;
         let empty_loan_account = next_account_info(account_info_iter)?;
-        let empty_loan_spl_account = next_account_info(account_info_iter)?;
         let loan_collateral_account = next_account_info(account_info_iter)?;
         let spl_mint = next_account_info(account_info_iter)?;
         let chainlink_feed_account = next_account_info(account_info_iter)?;
@@ -347,10 +347,6 @@ impl Processor {
         let mut uninit_loan_state = LoanState::unpack_unchecked(&empty_loan_account.data.borrow())?;
         if uninit_loan_state.is_initialized() {
             return Err(LendingPlatformError::AlreadyInitialized.into());
-        }
-
-        if !rent.is_exempt(empty_loan_spl_account.lamports(), empty_loan_spl_account.data_len()) {
-            return Err(LendingPlatformError::NotRentExempt.into());
         }
 
         if chainlink_sol_usd_feed_account.key.to_string() != CHAINLINK_SOL_USD_FEED_ADDRESS {
@@ -445,7 +441,6 @@ impl Processor {
         let lending_pool_account = next_account_info(account_info_iter)?;
         let lending_pool_spl_account = next_account_info(account_info_iter)?;
         let loan_account = next_account_info(account_info_iter)?;
-        let loan_spl_account = next_account_info(account_info_iter)?;
         let loan_collateral_account = next_account_info(account_info_iter)?;
         let spl_mint = next_account_info(account_info_iter)?;
         let clock_sysvar = next_account_info(account_info_iter)?;
@@ -519,13 +514,6 @@ impl Processor {
         }
 
         let mut loan_state = LoanState::unpack(&loan_account.data.borrow())?;
-        let loan_spl_data = spl_token::state::Account::unpack(&loan_spl_account.data.borrow())?;
-        if loan_spl_data.owner != *loan_account.key {
-            return Err(LendingPlatformError::InvalidAccounts.into());
-        }
-        if loan_spl_data.mint != *spl_mint.key {
-            return Err(LendingPlatformError::InvalidAccounts.into());
-        }
         if loan_state.lending_account != *lending_pool_account.key {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
@@ -537,7 +525,11 @@ impl Processor {
         }
 
         let interest_in_a_year = (loan_state.amount * loan_state.expected_apy as u64) / 100;
-        let interest_due = borrow_time.checked_mul(interest_in_a_year).and_then(|intermediate_mul| (intermediate_mul as u128).checked_div(YEAR_IN_SECONDS as u128));
+        let interest_due = borrow_time.checked_mul(interest_in_a_year).and_then(|intermediate_mul| {
+                msg!("floating interest is: {} (Will be rounded up to next int)", (intermediate_mul as f64 / SECONDS_PER_YEAR));
+                (intermediate_mul as f64 / SECONDS_PER_YEAR).ceil().to_u64()
+            }
+        );
         if interest_due.is_none() {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }

@@ -12,6 +12,7 @@ test-bpf = []
 [dependencies]
 spl-token = {version = "3.0.1", features = ["no-entrypoint"]}
 solana-program = "1.7.4"
+solana-sdk = "1.7.4"
 arrayref = "0.3.6"
 thiserror = "1.0.21"
 num-derive = "0.3"
@@ -22,8 +23,8 @@ chainlink = { git = "https://github.com/smartcontractkit/chainlink-solana", pack
 crate-type = ["cdylib", "lib"]
 
 [dev-dependencies]
-solana-sdk = "1.7.4"
 solana-program-test = "1.7.4"
 tokio = { version = "1.0", features = ["macros"]}
 borsh = "0.9"
+bincode = "1.3.3"
 

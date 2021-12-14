@@ -53,16 +53,14 @@ pub enum LendingPlatformInstructions {
     /// 4. `[]` Lending pool PDA controlled SPL token account from which funds will transfer to borrower
     /// 5. `[]` Lending pool owner's SPL token account
     /// 6. `[writable]` Empty loan account owned by this program (PDA account)
-    /// 7. `[]` Empty Loan account PDA controlled SPL token account in which funds will be deposited from (rent exemption check)
-    ///    lending pool PDA SPL and from there transferred to borrower's SPL account, owner set to 4 (rent exemption check)
-    /// 8. `[]` pda controlled loan account collateral account
-    /// 9. `[]` SPL token mint (All spl token should have this account as mint)
-    /// 10. `[]` Chainlink feed account (must match feed account pubkey stored in lending pool account)
-    /// 11. `[]` Chainlink sol to usd feed account (must match hardcoded key)
-    /// 12. `[]` rent sysvar
-    /// 13. `[]` Clock sysvar
-    /// 14. `[]` token program
-    /// 15. `[]` system program
+    /// 7. `[]` pda controlled loan account collateral account
+    /// 8. `[]` SPL token mint (All spl token should have this account as mint)
+    /// 9. `[]` Chainlink feed account (must match feed account pubkey stored in lending pool account)
+    /// 10. `[]` Chainlink sol to usd feed account (must match hardcoded key)
+    /// 11. `[]` rent sysvar
+    /// 12. `[]` Clock sysvar
+    /// 13. `[]` token program
+    /// 14. `[]` system program
     NewLoan(NewLoan),
 
     /// Payback loan This works by doing opposite of NewLoan
@@ -72,13 +70,11 @@ pub enum LendingPlatformInstructions {
     /// 3. `[writable]` Lending pool account which is initialized and owned by this program (PDA account)
     /// 4. `[]` Lending pool PDA controlled SPL token account into which funds will transferred from borrower SPL account
     /// 5. `[writable]` Initialized loan account owned by this program (PDA account)
-    /// 6. `[]` Initialized Loan account PDA controlled SPL token account in which funds will be deposited from
-    ///    borrower SPL and from there transferred to lending pool SPL account, owner set to 4
-    /// 7. `[]` Loan account pda controlled collateral account
-    /// 8. `[]` SPL token mint (All spl token should have this account as mint)
-    /// 9. `[]` Clock sysvar
-    /// 10. `[]` token program
-    /// 11. `[]` system program
+    /// 6. `[]` Loan account pda controlled collateral account
+    /// 7. `[]` SPL token mint (All spl token should have this account as mint)
+    /// 8. `[]` Clock sysvar
+    /// 9. `[]` token program
+    /// 10. `[]` system program
     PaybackLoan(PaybackLoan),
 
     /// Backend indicating that this client has defaulted the loan, if yes the SOLs containing in loan
@@ -233,7 +229,6 @@ pub fn new_loan(
     lending_pool_account: &Pubkey,
     lending_pool_spl_account: &Pubkey,
     empty_loan_account: &Pubkey,
-    empty_loan_spl_account: &Pubkey,
     loan_collateral_account: &Pubkey,
     spl_token_mint: &Pubkey,
     chainlink_feed_account: &Pubkey,
@@ -250,7 +245,6 @@ pub fn new_loan(
         AccountMeta::new(*lending_pool_account, false),
         AccountMeta::new(*lending_pool_spl_account, false),
         AccountMeta::new(*empty_loan_account, false),
-        AccountMeta::new(*empty_loan_spl_account, false),
         AccountMeta::new(*loan_collateral_account, false),
         AccountMeta::new(*spl_token_mint, false),
         AccountMeta::new(*chainlink_feed_account, false),
@@ -277,7 +271,6 @@ pub fn payback_loan(
     lending_pool_account: &Pubkey,
     lending_pool_spl_account: &Pubkey,
     loan_account: &Pubkey,
-    loan_spl_account: &Pubkey,
     loan_collateral_account: &Pubkey,
     spl_token_mint: &Pubkey,
     token_prorgam: &Pubkey,
@@ -291,7 +284,6 @@ pub fn payback_loan(
         AccountMeta::new(*lending_pool_account, false),
         AccountMeta::new(*lending_pool_spl_account, false),
         AccountMeta::new(*loan_account, false),
-        AccountMeta::new(*loan_spl_account, false),
         AccountMeta::new(*loan_collateral_account, false),
         AccountMeta::new(*spl_token_mint, false),
         AccountMeta::new(sysvar::clock::id(), false),
