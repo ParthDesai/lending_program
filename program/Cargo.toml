@@ -17,7 +17,7 @@ arrayref = "0.3.6"
 thiserror = "1.0.21"
 num-derive = "0.3"
 num-traits = "0.2"
-chainlink = { git = "https://github.com/smartcontractkit/chainlink-solana", package = "chainlink-solana", features = ["no-entrypoint"] }
+chainlink = { git = "https://github.com/smartcontractkit/chainlink-solana", rev="154792b0ed195523069b6154f6a2871fe583e039", package = "chainlink-solana", features = ["no-entrypoint"] }
 
 [lib]
 crate-type = ["cdylib", "lib"]

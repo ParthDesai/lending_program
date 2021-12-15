@@ -534,23 +534,42 @@ impl Processor {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
         let interest_due = interest_due.unwrap() as u64;
-        let total_amount = interest_due + loan_state.amount;
+        let principle_amount = loan_state.amount;
 
-        let stablecoin_transfer_instruction = spl_token::instruction::transfer(
+        let principle_transfer_instruction = spl_token::instruction::transfer(
             token_program.key,
             borrower_spl_account.key,
             lending_pool_spl_account.key,
             borrower_account.key,
             &[],
-            total_amount
+            principle_amount
         )?;
 
         invoke(
-            &stablecoin_transfer_instruction,
+            &principle_transfer_instruction,
             &[
                 token_program.clone(),
                 borrower_spl_account.clone(),
                 lending_pool_spl_account.clone(),
+                borrower_account.clone()
+            ]
+        )?;
+
+        let interest_transfer_instruction = spl_token::instruction::transfer(
+            token_program.key,
+            borrower_spl_account.key,
+            lender_spl_account.key,
+            borrower_account.key,
+            &[],
+            interest_due
+        )?;
+
+        invoke(
+            &interest_transfer_instruction,
+            &[
+                token_program.clone(),
+                borrower_spl_account.clone(),
+                lender_spl_account.clone(),
                 borrower_account.clone()
             ]
         )?;
@@ -572,7 +591,7 @@ impl Processor {
         loan_state.status = LOANSTATE_PAYEDBACK;
         LoanState::pack(loan_state, &mut loan_account.data.borrow_mut())?;
 
-        lending_pool_state.coin_amount += total_amount as u128;
+        lending_pool_state.coin_amount += principle_amount as u128;
         lending_pool_state.number_of_outstanding_loans -= 1;
         LendingPoolState::pack(lending_pool_state, &mut lending_pool_account.data.borrow_mut())?;
 

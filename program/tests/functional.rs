@@ -971,8 +971,8 @@ async fn test_lending_program_payback_loan() {
     if payed_back_lending_pool_state.number_of_outstanding_loans != 0 {
         panic!("Number of outstanding loan should be 0");
     }
-    if payed_back_lending_pool_state.coin_amount != lending_pool_state.coin_amount + 1 as u128 {
-        panic!("Coin amount should be initial amount + interest");
+    if payed_back_lending_pool_state.coin_amount != lending_pool_state.coin_amount as u128 {
+        panic!("Coin amount should be principle amount");
     }
     if payed_back_lending_pool_state.status != LENDINGPOOL_OPEN {
         panic!("Lending pool must be open");
@@ -994,6 +994,18 @@ async fn test_lending_program_payback_loan() {
     }
     if loan_state.status != LOANSTATE_PAYEDBACK {
         panic!("Loan should have been payed back");
+    }
+
+    let lending_pool_spl_account = program_test_context.banks_client.get_account(lending_pool_token_account.pubkey()).await.unwrap().unwrap();
+    let lending_pool_spl_account_state = spl_token::state::Account::unpack(&lending_pool_spl_account.data[..spl_token::state::Account::LEN]).unwrap();
+    if lending_pool_spl_account_state.amount != lending_pool_arg.total_lending_amount {
+        panic!("Lending pool spl account must have lending amount allocated");
+    }
+
+    let lender_spl_account = program_test_context.banks_client.get_account(lender_token_account.pubkey()).await.unwrap().unwrap();
+    let lender_spl_account_state = spl_token::state::Account::unpack(&lender_spl_account.data[..spl_token::state::Account::LEN]).unwrap();
+    if lender_spl_account_state.amount != (50000 - lending_pool_arg.total_lending_amount) + 1 {
+        panic!("Lender should have received interest. Expected: {}, Actual: {}", (50000 - lending_pool_arg.total_lending_amount) + 1, lender_spl_account_state.amount);
     }
 
     let close_lending_instruction = close_lending(
@@ -1041,8 +1053,8 @@ async fn test_lending_program_payback_loan() {
 
     let spl_deposit_account = program_test_context.banks_client.get_account(spl_deposit_account.pubkey()).await.unwrap().unwrap();
     let spl_deposit_account_state = spl_token::state::Account::unpack(&spl_deposit_account.data[..spl_token::state::Account::LEN]).unwrap();
-    if spl_deposit_account_state.amount != lending_pool_arg.total_lending_amount + 1 {
-        panic!("Spl deposit amount must be equal to lending pool's total lending amount + Interest. Actual: {}", spl_deposit_account_state.amount);
+    if spl_deposit_account_state.amount != lending_pool_arg.total_lending_amount {
+        panic!("Spl deposit amount must be equal to lending pool's total lending amount. Actual: {}", spl_deposit_account_state.amount);
     }
 
     let lending_pool_account = program_test_context.banks_client.get_account(pda_lending_pool_address).await.unwrap().unwrap();
