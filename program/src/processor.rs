@@ -14,10 +14,10 @@ use solana_program::clock::Clock;
 use std::convert::TryInto;
 use num_traits::ToPrimitive;
 use solana_program::msg;
-use solana_sdk::timing::SECONDS_PER_YEAR;
 
 const CHAINLINK_SOL_USD_FEED_ADDRESS: &str = "FmAmfoyPXiA8Vhhe6MZTr3U6rZfEZ1ctEHay1ysqCqcf";
 const SOL_TO_LAMPORT_MULTIPLIER: u128 = 100000000;
+pub const SECONDS_PER_YEAR: f64 = 365.242_199 * 24.0 * 60.0 * 60.0
 
 pub struct Processor;
 
