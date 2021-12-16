@@ -44,7 +44,13 @@ pub enum LendingPlatformError {
     NotEnoughFundsInLendingPool,
 
     #[error("Lending pool has outstanding loans")]
-    LendingPoolHasOutstandingLoan
+    LendingPoolHasOutstandingLoan,
+
+    #[error("Max payback time should be less")]
+    LendingPoolMaxPaybackTimeInvalid,
+
+    #[error("Expected APY should be less")]
+    LendingPoolExpectedApyInvalid
 }
 
 impl From<LendingPlatformError> for ProgramError {
@@ -98,6 +104,12 @@ impl PrintProgramError for LendingPlatformError {
             }
             LendingPlatformError::LendingPoolHasOutstandingLoan => {
                 println!("Lending pool has outstanding loans")
+            }
+            LendingPlatformError::LendingPoolMaxPaybackTimeInvalid => {
+                println!("Max payback time should be less")
+            }
+            LendingPlatformError::LendingPoolExpectedApyInvalid => {
+                println!("Expected APY should be less")
             }
         }
     }

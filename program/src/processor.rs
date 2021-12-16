@@ -17,7 +17,7 @@ use solana_program::msg;
 
 const CHAINLINK_SOL_USD_FEED_ADDRESS: &str = "FmAmfoyPXiA8Vhhe6MZTr3U6rZfEZ1ctEHay1ysqCqcf";
 const SOL_TO_LAMPORT_MULTIPLIER: u128 = 100000000;
-pub const SECONDS_PER_YEAR: f64 = 365.242_199 * 24.0 * 60.0 * 60.0;
+pub const SECONDS_PER_YEAR: u64 = 31536000;
 
 pub struct Processor;
 
@@ -199,6 +199,14 @@ impl Processor {
         let mut uninit_lending_pool_state = LendingPoolState::unpack_unchecked(&empty_lending_pool_account.data.borrow())?;
         if uninit_lending_pool_state.is_initialized() {
             return Err(LendingPlatformError::AlreadyInitialized.into());
+        }
+
+        if arg.max_payback_time > 10 * SECONDS_PER_YEAR {
+            return Err(LendingPlatformError::LendingPoolMaxPaybackTimeInvalid.into())
+        }
+
+        if arg.expected_apy > 200 {
+            return Err(LendingPlatformError::LendingPoolExpectedApyInvalid.into());
         }
 
         // Checking if the feed is valid or not
@@ -524,16 +532,29 @@ impl Processor {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
 
-        let interest_in_a_year = (loan_state.amount * loan_state.expected_apy as u64) / 100;
-        let interest_due = borrow_time.checked_mul(interest_in_a_year).and_then(|intermediate_mul| {
-                msg!("floating interest is: {} (Will be rounded up to next int)", (intermediate_mul as f64 / SECONDS_PER_YEAR));
-                (intermediate_mul as f64 / SECONDS_PER_YEAR).ceil().to_u64()
-            }
-        );
-        if interest_due.is_none() {
+        // It is safe to multiply by below multiplier as u64::MAX * MULTIPLIER is going to less
+        // than u128::MAX
+        const MULTIPLIER: u128 = 1_00_000_000;
+        let inflated_loan_amount = loan_state.amount as u128 * MULTIPLIER;
+        msg!("Inflated loan amount: {}", inflated_loan_amount);
+
+        let intermediate_result = ((inflated_loan_amount * loan_state.expected_apy as u128) / 100).checked_mul(borrow_time as u128);
+        if intermediate_result.is_none() {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
-        let interest_due = interest_due.unwrap() as u64;
+        msg!("Intermediate : {}", intermediate_result.unwrap());
+
+        let inflated_interest = intermediate_result.unwrap() / SECONDS_PER_YEAR as u128;
+        msg!("Inflated interest : {}", inflated_interest);
+
+        let interest_due = if inflated_interest > MULTIPLIER {
+            (inflated_interest / MULTIPLIER) + 1
+        } else {
+            1
+        };
+
+        msg!("Interest due : {}", interest_due);
+
         let principle_amount = loan_state.amount;
 
         let principle_transfer_instruction = spl_token::instruction::transfer(
@@ -561,7 +582,7 @@ impl Processor {
             lender_spl_account.key,
             borrower_account.key,
             &[],
-            interest_due
+            interest_due as u64
         )?;
 
         invoke(
