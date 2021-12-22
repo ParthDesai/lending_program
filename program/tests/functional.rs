@@ -10,9 +10,9 @@ use solana_sdk::{account::Account, signature::Keypair, signature::Signer, system
 use solana_sdk::program_pack::Pack;
 use solana_sdk::transaction::TransactionError;
 use spl_token::{self, instruction::{initialize_mint, initialize_account, mint_to}, state};
-use lending_program::params::{CloseLending, DefaultLoan, NewLendingPool, NewLoan, PaybackLoan};
+use lending_program::params::{CloseLending, DefaultLoan, InitLendingPoolAccount, InitLoanAccount, NewLendingPool, NewLoan, PaybackLoan};
 use lending_program::entrypoint::process_instruction;
-use lending_program::instructions::{close_lending, default_loan, new_lending_pool, new_loan, payback_loan};
+use lending_program::instructions::{close_lending, default_loan, init_lending_pool_account_data, init_loan_account_data, new_lending_pool, new_loan, payback_loan};
 use chainlink::state::{Aggregator, Config};
 use solana_program::borsh::get_packed_len;
 use borsh::ser::BorshSerialize;
@@ -21,6 +21,173 @@ use solana_program::program_error::ProgramError;
 use solana_sdk::system_transaction::create_account;
 use solana_sdk::timing::SECONDS_PER_YEAR;
 use lending_program::state::{LENDINGPOOL_CLOSE, LENDINGPOOL_OPEN, LendingPoolState, LoanState, LOANSTATE_DEFAULTED, LOANSTATE_LOANED, LOANSTATE_PAYEDBACK};
+
+/// This test will not work as the ProgramTest does not support resizing of the account
+/// But it should work fine with real blockchain.
+#[tokio::test]
+async fn test_init_loan() {
+    // Create program and test environment
+    let program_id = Pubkey::from_str("VestingbGKPFXCWuBvfkegQfZyiNwAJb9Ss623VQ5DA").unwrap();
+
+    let lender_account = Keypair::new();
+    let lender_token_account = Keypair::new();
+
+    let borrower_account = Keypair::new();
+
+    let mint_authority = Keypair::new();
+    let mint = Keypair::new();
+
+    let lending_pool_pda_signer_seeds : &[&[_]] = &[
+        b"lending_pool",
+        &lender_token_account.pubkey().to_bytes(),
+    ];
+    let (pda_lending_pool_address, loan_bump_seed) = Pubkey::find_program_address(lending_pool_pda_signer_seeds, &program_id);
+
+    let loan_pda_signer_seeds : &[&[_]] = &[
+        b"loan_account",  &pda_lending_pool_address.to_bytes(),
+        &borrower_account.pubkey().to_bytes(),
+    ];
+    let (pda_loan_address, loan_bump_seed) = Pubkey::find_program_address(loan_pda_signer_seeds, &program_id);
+
+    let mut program_test = ProgramTest::new(
+        "lending_program",
+        program_id,
+        processor!(process_instruction),
+    );
+
+    program_test.add_account(
+        borrower_account.pubkey(),
+        Account {
+            lamports: 50000000,
+            ..Account::default()
+        }
+    );
+
+    program_test.add_account(
+        pda_lending_pool_address,
+        Account {
+            lamports: 40000000,
+            data: Vec::from([0u8; LendingPoolState::LEN]),
+            owner: program_id,
+            ..Account::default()
+        }
+    );
+
+    let mut program_test_context = program_test.start_with_context().await;
+    let recent_blockhash = program_test_context.last_blockhash.clone();
+
+    program_test_context.banks_client.process_transaction(mint_init_transaction(
+        &program_test_context.payer,
+        &mint,
+        &mint_authority,
+        recent_blockhash
+    )).await.unwrap();
+
+    program_test_context.banks_client.process_transaction(
+        create_token_account(&program_test_context.payer, &mint, recent_blockhash, &lender_token_account, &lender_account.pubkey())
+    ).await.unwrap();
+
+
+    let init_loan_account_instruction = init_loan_account_data(
+        &program_id,
+        InitLoanAccount{
+            loan_bump_seed,
+        },
+        &solana_program::system_program::id(),
+        &pda_lending_pool_address,
+        &borrower_account.pubkey(),
+        &pda_loan_address
+    ).unwrap();
+
+    let mut init_loan_account_tx = Transaction::new_with_payer(
+        &[init_loan_account_instruction],
+        Some(&program_test_context.payer.pubkey()),
+    );
+    init_loan_account_tx.partial_sign(
+        &[
+            &program_test_context.payer,
+            &borrower_account
+        ],
+        recent_blockhash
+    );
+
+    program_test_context.banks_client.process_transaction(init_loan_account_tx).await.unwrap();
+}
+
+
+/// This test will not work as the ProgramTest does not support resizing of the account
+/// But it should work fine with real blockchain.
+#[tokio::test]
+async fn test_init_lending_account() {
+    // Create program and test environment
+    let program_id = Pubkey::from_str("VestingbGKPFXCWuBvfkegQfZyiNwAJb9Ss623VQ5DA").unwrap();
+
+    let lender_account = Keypair::new();
+    let lender_token_account = Keypair::new();
+
+    let mint_authority = Keypair::new();
+    let mint = Keypair::new();
+
+    let lending_pool_pda_signer_seeds : &[&[_]] = &[
+        b"lending_pool",
+        &lender_token_account.pubkey().to_bytes(),
+    ];
+    let (pda_lending_pool_address, bump_seed) = Pubkey::find_program_address(lending_pool_pda_signer_seeds, &program_id);
+
+    let mut program_test = ProgramTest::new(
+        "lending_program",
+        program_id,
+        processor!(process_instruction),
+    );
+
+    program_test.add_account(
+        lender_account.pubkey(),
+        Account {
+            lamports: 50000000,
+            ..Account::default()
+        }
+    );
+
+    let mut program_test_context = program_test.start_with_context().await;
+    let recent_blockhash = program_test_context.last_blockhash.clone();
+
+    program_test_context.banks_client.process_transaction(mint_init_transaction(
+        &program_test_context.payer,
+        &mint,
+        &mint_authority,
+        recent_blockhash
+    )).await.unwrap();
+
+    program_test_context.banks_client.process_transaction(
+        create_token_account(&program_test_context.payer, &mint, recent_blockhash, &lender_token_account, &lender_account.pubkey())
+    ).await.unwrap();
+
+
+    let init_lending_pool_instruction = init_lending_pool_account_data(
+        &program_id,
+        InitLendingPoolAccount{
+            bump_seed
+        },
+        &solana_program::system_program::id(),
+        &lender_account.pubkey(),
+        &lender_token_account.pubkey(),
+        &pda_lending_pool_address
+    ).unwrap();
+
+    let mut init_lending_pool_tx = Transaction::new_with_payer(
+        &[init_lending_pool_instruction],
+        Some(&program_test_context.payer.pubkey()),
+    );
+    init_lending_pool_tx.partial_sign(
+        &[
+            &program_test_context.payer,
+            &lender_account
+        ],
+        recent_blockhash
+    );
+
+    program_test_context.banks_client.process_transaction(init_lending_pool_tx).await.unwrap();
+}
 
 
 #[tokio::test]

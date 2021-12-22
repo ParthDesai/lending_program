@@ -173,13 +173,42 @@ pub fn init_lending_pool_account_data(
     params: InitLendingPoolAccount,
     system_program: &Pubkey,
     lender_account: &Pubkey,
+    lender_spl_account: &Pubkey,
+    lending_pool_pda_account: &Pubkey
 ) -> Result<Instruction, ProgramError> {
     let data = LendingPlatformInstructions::InitLendingPoolAccount(params).pack()?;
 
     let accounts = vec![
         AccountMeta::new(*system_program, false),
         AccountMeta::new(sysvar::rent::id(), false),
-        AccountMeta::new(*lender_account, false),
+        AccountMeta::new(*lender_account, true),
+        AccountMeta::new(*lender_spl_account, false),
+        AccountMeta::new(*lending_pool_pda_account, false)
+    ];
+
+    Ok(Instruction {
+        program_id: *program_id,
+        data,
+        accounts,
+    })
+}
+
+pub fn init_loan_account_data(
+    program_id: &Pubkey,
+    params: InitLoanAccount,
+    system_program: &Pubkey,
+    pda_lending_pool_account: &Pubkey,
+    borrower_account: &Pubkey,
+    pda_loan_account: &Pubkey
+) -> Result<Instruction, ProgramError> {
+    let data = LendingPlatformInstructions::InitLoanAccount(params).pack()?;
+
+    let accounts = vec![
+        AccountMeta::new(*system_program, false),
+        AccountMeta::new(sysvar::rent::id(), false),
+        AccountMeta::new(*pda_lending_pool_account, false),
+        AccountMeta::new(*borrower_account, true),
+        AccountMeta::new(*pda_loan_account, false)
     ];
 
     Ok(Instruction {
