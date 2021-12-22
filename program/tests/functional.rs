@@ -24,6 +24,8 @@ use lending_program::state::{LENDINGPOOL_CLOSE, LENDINGPOOL_OPEN, LendingPoolSta
 
 /// This test will not work as the ProgramTest does not support resizing of the account
 /// But it should work fine with real blockchain.
+/// Error will be similar to this:
+/// thread 'solana-bank-forks-client' panicked at 'Account data resizing not supported yet: 0 -> 107. Consider making this test conditional on `#[cfg(feature = "test-bpf")]`', /Users/parth/.cargo/registry/src/github.com-1ecc6299db9ec823/solana-program-test-1.7.4/src/lib.rs:362:25
 #[tokio::test]
 async fn test_init_loan() {
     // Create program and test environment
@@ -117,6 +119,9 @@ async fn test_init_loan() {
 
 /// This test will not work as the ProgramTest does not support resizing of the account
 /// But it should work fine with real blockchain.
+/// Error will be similar to this:
+/// thread 'solana-bank-forks-client' panicked at 'Account data resizing not supported yet: 0 -> 107.
+/// Consider making this test conditional on `#[cfg(feature = "test-bpf")]`', /Users/parth/.cargo/registry/src/github.com-1ecc6299db9ec823/solana-program-test-1.7.4/src/lib.rs:362:25
 #[tokio::test]
 async fn test_init_lending_account() {
     // Create program and test environment
