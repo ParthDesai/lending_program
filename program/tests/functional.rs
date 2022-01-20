@@ -208,8 +208,8 @@ async fn test_lending_program_default_loan() {
     let sol_to_usd_rate = 120u64;
     let coin_to_usd_rate = 240u64;
 
-    let collateral_lamports = (((((100 * 240) * 100) / 60) * 100000000 / sol_to_usd_rate) + 1);
-    let borrower_initial_balance = 50000000000;
+    let collateral_lamports = (((((100 * 240) * 100) / 60) * 1000000000 / sol_to_usd_rate) + 1);
+    let borrower_initial_balance = 500000000000;
 
     let mint_authority = Keypair::new();
     let mint = Keypair::new();
@@ -716,8 +716,8 @@ async fn test_lending_program_payback_loan() {
     let sol_to_usd_rate = 120u64;
     let coin_to_usd_rate = 240u64;
 
-    let collateral_lamports = (((((100 * 240) * 100) / 60) * 100000000  / sol_to_usd_rate) + 1);
-    let borrower_initial_balance = 50000000000;
+    let collateral_lamports = (((((100 * 240) * 100) / 60) * 1000000000  / sol_to_usd_rate) + 1);
+    let borrower_initial_balance = 500000000000;
 
     let mint_authority = Keypair::new();
     let mint = Keypair::new();

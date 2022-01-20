@@ -16,7 +16,7 @@ use num_traits::ToPrimitive;
 use solana_program::msg;
 
 const CHAINLINK_SOL_USD_FEED_ADDRESS: &str = "FmAmfoyPXiA8Vhhe6MZTr3U6rZfEZ1ctEHay1ysqCqcf";
-const SOL_TO_LAMPORT_MULTIPLIER: u128 = 100000000;
+const SOL_TO_LAMPORT_MULTIPLIER: u128 = 1000000000;
 pub const SECONDS_PER_YEAR: u64 = 31536000;
 
 pub struct Processor;
