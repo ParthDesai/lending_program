@@ -208,7 +208,7 @@ async fn test_lending_program_default_loan() {
     let sol_to_usd_rate = 120u64;
     let coin_to_usd_rate = 240u64;
 
-    let collateral_lamports = (((((100 * 240) * 100) / 60) / sol_to_usd_rate) + 1) * 100000000;
+    let collateral_lamports = (((((100 * 240) * 100) / 60) * 100000000 / sol_to_usd_rate) + 1);
     let borrower_initial_balance = 50000000000;
 
     let mint_authority = Keypair::new();
@@ -716,7 +716,7 @@ async fn test_lending_program_payback_loan() {
     let sol_to_usd_rate = 120u64;
     let coin_to_usd_rate = 240u64;
 
-    let collateral_lamports = (((((100 * 240) * 100) / 60) / sol_to_usd_rate) + 1) * 100000000;
+    let collateral_lamports = (((((100 * 240) * 100) / 60) * 100000000  / sol_to_usd_rate) + 1);
     let borrower_initial_balance = 50000000000;
 
     let mint_authority = Keypair::new();
@@ -1037,7 +1037,7 @@ async fn test_lending_program_payback_loan() {
         panic!("Coin amount in loan state does not match actual loan arg");
     }
     if loan_state.collateral_lamports != collateral_lamports as u128 {
-        panic!("Collateral amount in loan state does not match");
+        panic!("Collateral amount in loan state does not match, expected: {}, actual: {}", collateral_lamports, loan_state.collateral_lamports);
     }
     if loan_state.status != LOANSTATE_LOANED {
         panic!("Loan should have been payed back");
