@@ -383,8 +383,7 @@ impl Processor {
         msg!("Stable coin to usd conversion rate is: {}, target_usd: {}, collateral_usd: {}, sol_to_usd_conversion_rate: {}, collateral_sols: {}", stablecoin_to_usd_conversion_rate, target_usd, collateral_usd, sol_to_usd_conversion_rate, collateral_usd / sol_to_usd_conversion_rate);
 
         // This much sols need to be taken from the borrower account
-        let collateral_sols = (collateral_usd / sol_to_usd_conversion_rate) + 1;
-        let collateral_lamports = collateral_sols.checked_mul(SOL_TO_LAMPORT_MULTIPLIER);
+        let collateral_lamports = collateral_usd.checked_mul(SOL_TO_LAMPORT_MULTIPLIER).and_then(|multiplied| multiplied.checked_div(sol_to_usd_conversion_rate)).and_then(|output| output.checked_add(1));
         if collateral_lamports.is_none() {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
