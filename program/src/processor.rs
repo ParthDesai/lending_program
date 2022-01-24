@@ -1,3 +1,4 @@
+use std::cmp::min;
 use crate::error::LendingPlatformError;
 use crate::instructions::{LendingPlatformInstructions};
 use crate::params::{NewLoan, NewLendingPool, PaybackLoan, DefaultLoan, CloseLending, InitLendingPoolAccount, InitLoanAccount};
@@ -16,7 +17,7 @@ use num_traits::ToPrimitive;
 use solana_program::msg;
 
 const CHAINLINK_SOL_USD_FEED_ADDRESS: &str = "FmAmfoyPXiA8Vhhe6MZTr3U6rZfEZ1ctEHay1ysqCqcf";
-const SOL_TO_LAMPORT_MULTIPLIER: u128 = 1000000000;
+const CHAINLINK_SOL_FEED_DECIMALS: u8 = 9;
 pub const SECONDS_PER_YEAR: u64 = 31536000;
 
 pub struct Processor;
@@ -298,6 +299,11 @@ impl Processor {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
 
+        let lending_pool_spl_data = spl_token::state::Account::unpack(&lending_pool_spl_account.data.borrow())?;
+        if lending_pool_spl_data.mint != *spl_mint.key {
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+
         let lender_spl_account_bytes = lender_spl_account.key.to_bytes();
         let lending_pool_pda_signer_seeds : &[&[_]] = &[
             b"lending_pool",
@@ -378,15 +384,28 @@ impl Processor {
         let stablecoin_to_usd_conversion_rate = stablecoin_to_usd_conversion_rate.unwrap();
 
         let target_usd = arg.amount as u128 * stablecoin_to_usd_conversion_rate;
-        let collateral_usd = (100 * target_usd) / 60;
+        let mint_info = spl_token::state::Mint::unpack(&spl_mint.data.borrow())?;
 
-        msg!("Stable coin to usd conversion rate is: {}, target_usd: {}, collateral_usd: {}, sol_to_usd_conversion_rate: {}, collateral_sols: {}", stablecoin_to_usd_conversion_rate, target_usd, collateral_usd, sol_to_usd_conversion_rate, collateral_usd / sol_to_usd_conversion_rate);
+        let collateral_usd = 100u128.checked_mul(target_usd).and_then(|i| i.checked_div(60)).and_then(|i| {
+            if mint_info.decimals > CHAINLINK_SOL_FEED_DECIMALS {
+                10u128.checked_pow((mint_info.decimals - CHAINLINK_SOL_FEED_DECIMALS) as u32).and_then(|a| i.checked_div(a))
+            } else {
+                10u128.checked_pow((CHAINLINK_SOL_FEED_DECIMALS - mint_info.decimals) as u32).and_then(|a| i.checked_mul(a))
+            }
+        });
 
-        // This much sols need to be taken from the borrower account
-        let collateral_lamports = collateral_usd.checked_mul(SOL_TO_LAMPORT_MULTIPLIER).and_then(|multiplied| multiplied.checked_div(sol_to_usd_conversion_rate)).and_then(|output| output.checked_add(1));
+        if collateral_usd.is_none() {
+            msg!("Over/under flow in calculating collateral usd");
+            return Err(LendingPlatformError::InvalidAccounts.into());
+        }
+
+        let collateral_lamports = collateral_usd.and_then(|c| c.checked_div(sol_to_usd_conversion_rate)).and_then(|o| o.checked_add(1));
         if collateral_lamports.is_none() {
             return Err(LendingPlatformError::InvalidAccounts.into());
         }
+
+        // Program log: Stable coin to usd conversion rate is: 1000250000, target_usd: 16004000000000000, collateral_usd: 26673333333333333, sol_to_usd_conversion_rate: 124265000000, collateral_sols: 214648
+        msg!("Stable coin to usd conversion rate is: {}, target_usd: {}, collateral_usd: {}, sol_to_usd_conversion_rate: {}, collateral_lamports: {}", stablecoin_to_usd_conversion_rate, target_usd, collateral_usd.unwrap(), sol_to_usd_conversion_rate, collateral_lamports.unwrap());
 
         let collateral_lamports = collateral_lamports.unwrap();
         let transfer_amount = collateral_lamports.try_into().map_err(|_e| LendingPlatformError::InvalidAccounts)?;
